@@ -469,6 +469,130 @@ def scrna_markers(
             console.print(f"  {p}")
 
 
+@scrna_app.command("annotate")
+def scrna_annotate(
+    h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input integrated .h5ad (typically <run-dir>/02_integrate/integrated.h5ad)."),
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run root directory. Default: parent of h5ad's 02_integrate/."),
+    out: Path | None = typer.Option(None, "--out", "-o", help="Override output dir. By default writes to <run-dir>/04_annotate/."),
+    profile: str = typer.Option("default", "--profile", "-p", help="Profile name (must define a panel: chondrocyte_markers or celltype_broad)."),
+    panel: str | None = typer.Option(None, "--panel", help="Specific panel name in the profile (e.g. chondrocyte_markers). Default: auto-pick."),
+    resolution: float = typer.Option(0.5, "--resolution", help="Which leiden_res_<X> column to annotate."),
+    use_ai: bool = typer.Option(False, "--ai/--no-ai", help="Get an LLM second opinion alongside the panel match. Requires ANTHROPIC_API_KEY."),
+    ai_model: str = typer.Option("claude-haiku-4-5-20251001", "--ai-model", help="Anthropic model for the AI second opinion."),
+    use_pubmed: bool = typer.Option(False, "--pubmed/--no-pubmed", help="Fetch top PubMed papers per top marker, embed as evidence in the report."),
+    tissue: str | None = typer.Option(None, "--tissue", help="Tissue context (e.g. 'osteoarthritis cartilage'). Used to scope PubMed and AI prompt."),
+    top_n: int = typer.Option(30, "--top-n", help="How many top markers per cluster to consider for matching."),
+    write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Write annotated.h5ad with celltype obs columns."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing 04_annotate/ artifacts."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+) -> None:
+    """
+    Two-tier cluster annotation: deterministic panel match + optional LLM
+    second opinion + optional PubMed evidence column.
+
+    Maps to Rmd § 9-10. The panel-match step uses overlap-fraction with the
+    profile's marker dict. The AI step (--ai) is opt-in and never overrides
+    the deterministic call — both are reported side-by-side so the user
+    chooses.
+    """
+    import anndata as ad
+
+    from scellrun.profiles import load as load_profile
+    from scellrun.runlayout import (
+        StageOutputExists,
+        default_run_dir,
+        stage_dir,
+        write_run_meta,
+    )
+    from scellrun.scrna.annotate import run_annotate, write_artifacts
+
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+
+    try:
+        prof = load_profile(profile)
+    except ModuleNotFoundError:
+        console.print(f"[red]error:[/red] unknown profile {profile!r}. Try `scellrun profiles list`.")
+        raise typer.Exit(2) from None
+
+    if run_dir is None:
+        if h5ad.parent.name == "02_integrate":
+            run_dir = h5ad.parent.parent
+        else:
+            run_dir = default_run_dir()
+
+    if out is not None:
+        out_dir = out
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            out_dir = stage_dir(run_dir, "annotate", force=force)
+        except StageOutputExists as e:
+            console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(2) from None
+
+    console.print(
+        f"[bold]scellrun scrna annotate[/bold]  •  profile=[cyan]{profile}[/cyan]  "
+        f"resolution=[cyan]{resolution}[/cyan]  ai=[cyan]{use_ai}[/cyan]  "
+        f"pubmed=[cyan]{use_pubmed}[/cyan]"
+    )
+    console.print(f"run-dir: [dim]{run_dir}[/dim]")
+    console.print(f"out-dir: [dim]{out_dir}[/dim]")
+    console.print(f"reading [dim]{h5ad}[/dim]")
+
+    adata = ad.read_h5ad(h5ad)
+    console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+
+    try:
+        result = run_annotate(
+            adata,
+            prof,
+            resolution=resolution,
+            panel_name=panel,
+            use_ai=use_ai,
+            ai_model=ai_model,
+            use_pubmed=use_pubmed,
+            tissue=tissue,
+            top_n_markers=top_n,
+        )
+    except ValueError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
+
+    console.print(f"annotated [bold green]{len(result.annotations)}[/bold green] clusters using panel [cyan]{result.panel_name}[/cyan]")
+    for a in result.annotations[:10]:
+        ai_str = f" | AI: {a.ai_label}" if a.ai_label else ""
+        console.print(f"  cluster {a.cluster:>3}: {a.panel_label} (score {a.panel_score:.2f}){ai_str}")
+    if len(result.annotations) > 10:
+        console.print(f"  ... ({len(result.annotations) - 10} more)")
+
+    artifacts = write_artifacts(result, adata, out_dir, write_h5ad=write_h5ad, lang=lang)
+    write_run_meta(
+        run_dir,
+        command="scrna annotate",
+        params={
+            "h5ad": h5ad,
+            "out_dir": out_dir,
+            "profile": profile,
+            "panel_name": result.panel_name,
+            "resolution": resolution,
+            "use_ai": use_ai,
+            "ai_model": ai_model if use_ai else None,
+            "use_pubmed": use_pubmed,
+            "tissue": tissue,
+            "top_n": top_n,
+            "force": force,
+            "lang": lang,
+        },
+    )
+
+    console.print(f"[bold]report:[/bold] [link=file://{artifacts['report'].resolve()}]{artifacts['report']}[/link]")
+    console.print(f"annotations CSV: {artifacts['annotations']}")
+    if "annotated_h5ad" in artifacts:
+        console.print(f"annotated h5ad: {artifacts['annotated_h5ad']}")
+
+
 @profiles_app.command("list")
 def profiles_list() -> None:
     """List available profiles."""

@@ -73,6 +73,24 @@
 {% endfor %}
 </dl>
 
+<h2>Threshold sensitivity</h2>
+<p style="font-size:.9rem; color:#666;">
+  How many cells survive each candidate threshold, computed from the per-cell metrics
+  without rerunning anything. Use this table to decide whether the default cutoff is
+  appropriate for your dataset.
+</p>
+{% for knob, rows in sensitivity.items() %}
+<h3 style="font-size:1rem; margin-top:1rem;">{{ knob }}</h3>
+<table>
+<thead><tr><th>threshold</th><th>cells passing</th><th>%</th></tr></thead>
+<tbody>
+{% for row in rows %}
+<tr><td>{{ row.threshold }}</td><td>{{ "{:,}".format(row.n_pass) }}</td><td>{{ "%.1f"|format(row.pct_pass) }}%</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endfor %}
+
 {% if n_top_flagged > 0 %}
 <h2>Top {{ n_top_flagged }} flagged cells</h2>
 <p style="font-size: .9rem; color: #666;">

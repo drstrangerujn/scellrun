@@ -58,6 +58,7 @@ class QCResult:
     raw_counts_check: str  # 'looks_like_raw' | 'looks_like_normalized' | 'unknown'
     flag_breakdown: dict[str, int]  # which threshold rejected how many cells
     top_flagged: pd.DataFrame  # up to 20 worst-offender cells with reasons
+    sensitivity: dict[str, list[dict]]  # per-knob: [{threshold, n_pass, pct_pass}, ...]
 
 
 class InvalidInputError(ValueError):
@@ -239,6 +240,28 @@ def run_qc(
             columns=["n_genes_by_counts", "total_counts", "pct_counts_mt", "pct_counts_hb", "why_flagged"]
         )
 
+    # Sensitivity sweep — show how many cells survive at alternative thresholds.
+    # The user uses this to pick a threshold; we don't rerun, just count from
+    # the existing per-cell metrics.
+    n_total = len(obs)
+    sensitivity: dict[str, list[dict]] = {
+        "max_pct_mt": [
+            {"threshold": t, "n_pass": int((obs["pct_counts_mt"] <= t).sum()),
+             "pct_pass": float(100.0 * (obs["pct_counts_mt"] <= t).sum() / max(n_total, 1))}
+            for t in (5.0, 10.0, 15.0, 20.0, 25.0, 30.0)
+        ],
+        "max_genes": [
+            {"threshold": t, "n_pass": int((obs["n_genes_by_counts"] <= t).sum()),
+             "pct_pass": float(100.0 * (obs["n_genes_by_counts"] <= t).sum() / max(n_total, 1))}
+            for t in (3000, 4000, 5000, 6000, 8000)
+        ],
+        "min_genes": [
+            {"threshold": t, "n_pass": int((obs["n_genes_by_counts"] >= t).sum()),
+             "pct_pass": float(100.0 * (obs["n_genes_by_counts"] >= t).sum() / max(n_total, 1))}
+            for t in (100, 200, 300, 500, 800)
+        ],
+    }
+
     return QCResult(
         n_cells_in=n_cells_in,
         n_cells_pass=int(obs["scellrun_qc_pass"].sum()),
@@ -253,6 +276,7 @@ def run_qc(
         raw_counts_check=raw_check,
         flag_breakdown=flag_breakdown,
         top_flagged=top_flagged,
+        sensitivity=sensitivity,
     )
 
 
@@ -309,6 +333,7 @@ def write_artifacts(
         flag_breakdown=result.flag_breakdown,
         top_flagged_html=result.top_flagged.to_html(float_format=lambda x: f"{x:.2f}"),
         n_top_flagged=len(result.top_flagged),
+        sensitivity=result.sensitivity,
     )
 
     html_path = out_dir / "report.html"

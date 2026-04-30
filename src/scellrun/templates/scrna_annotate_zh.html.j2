@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>scellrun — 单细胞 cluster 注释</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; color: #222; line-height: 1.7; }
+  h1 { font-size: 1.6rem; border-bottom: 2px solid #333; padding-bottom: .3rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  h3 { font-size: 1rem; margin-top: 1.4rem; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin: .3rem 0 1.2rem; font-size: .9rem; }
+  th, td { border: 1px solid #ddd; padding: .35rem .5rem; vertical-align: top; }
+  th { background: #f6f6f6; text-align: left; }
+  .label-pill { display: inline-block; padding: .1rem .5rem; border-radius: .8rem; background: #eef4ff; color: #1f4e8a; font-weight: 600; font-size: .85rem; }
+  .ai-pill { background: #faf3ee; color: #8a4f1f; }
+  .markers { font-family: ui-monospace, "SF Mono", monospace; font-size: .82rem; color: #555; }
+  .rationale-line { color: #555; font-size: .85rem; }
+  .pubmed-list { margin: .25rem 0; padding-left: 1.2rem; font-size: .85rem; }
+  .ambiguous { color: #b56; font-weight: 600; }
+  footer { color: #888; font-size: .82rem; margin-top: 3rem; border-top: 1px solid #eee; padding-top: .7rem; }
+</style>
+</head>
+<body>
+
+<h1>单细胞 cluster 注释</h1>
+
+<dl style="display:grid; grid-template-columns: 220px 1fr; gap:.2rem .8rem; font-size:.92rem;">
+  <dt>分辨率</dt>          <dd>{{ result.resolution }}</dd>
+  <dt>使用的 panel</dt>    <dd>{{ result.panel_name }}</dd>
+  <dt>组织背景</dt>        <dd>{{ result.tissue or "（未提供——加 --tissue 可让 PubMed 检索更精准）" }}</dd>
+  <dt>AI 第二意见</dt>     <dd>{{ "已开启" if result.used_ai else "未开启（--ai 关）" }}</dd>
+  <dt>PubMed 文献证据</dt> <dd>{{ "已开启" if result.used_pubmed else "未开启（--pubmed 关）" }}</dd>
+  <dt>总 cluster 数</dt>   <dd>{{ result.annotations | length }}</dd>
+</dl>
+
+<h2>每个 cluster 的注释</h2>
+<p style="color:#666; font-size:.9rem;">
+  <strong>panel_label</strong> = profile panel 里得分最高的分组；<strong>margin</strong>
+  是与第二名的差距（差距小 = 模糊，建议人眼复核）。
+  开了 <code>--ai</code> 会把 LLM 独立判断列出来，人最终拍板。
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Cluster</th>
+      <th>Panel 标签（分数 / 差距）</th>
+      {% if result.used_ai %}<th>AI 标签</th>{% endif %}
+      <th>Top markers（前 10）</th>
+      <th>判断依据</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for a in result.annotations %}
+    <tr>
+      <td><strong>{{ a.cluster }}</strong></td>
+      <td>
+        <span class="label-pill {% if a.panel_margin < 0.05 %}ambiguous{% endif %}">{{ a.panel_label }}</span><br>
+        <span style="font-size:.8rem; color:#666;">分数 {{ "%.2f"|format(a.panel_score) }}，差距 {{ "%.2f"|format(a.panel_margin) }}</span>
+      </td>
+      {% if result.used_ai %}
+      <td>
+        {% if a.ai_label %}
+          <span class="label-pill ai-pill">{{ a.ai_label }}</span><br>
+          <span class="rationale-line">{{ a.ai_rationale }}</span>
+        {% else %}
+          <span style="color:#999; font-size:.85rem;">—</span><br>
+          <span class="rationale-line">{{ a.ai_rationale or "（跳过）" }}</span>
+        {% endif %}
+      </td>
+      {% endif %}
+      <td class="markers">{{ a.top_markers[:10] | join(", ") }}</td>
+      <td class="rationale-line">{{ a.panel_rationale }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if result.used_pubmed %}
+<h2>PubMed 文献证据</h2>
+{% for a in result.annotations %}
+<h3>Cluster {{ a.cluster }} — {{ a.panel_label }}</h3>
+{% if a.pubmed %}
+  {% for gene, papers in a.pubmed.items() %}
+    <p><strong>{{ gene }}</strong></p>
+    {% if papers %}
+    <ul class="pubmed-list">
+      {% for p in papers %}
+        <li>{{ p.year }} — <a href="{{ p.url }}" target="_blank">{{ p.title }}</a></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color:#999; font-size:.85rem;">（这个基因 + 组织上下文最近无 PubMed 命中）</p>
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<h2>下一步</h2>
+<p>
+  <code>annotated.h5ad</code> 带 <code>obs.scellrun_celltype_panel</code>{% if result.used_ai %} 和 <code>obs.scellrun_celltype_ai</code>{% endif %}
+  两列。挑哪个进下游你定（或者在 scanpy 里 cluster-level 手动覆盖再导回来）。
+  v0.5 <code>scellrun report</code> 会把 QC + integrate + markers + annotate 串成一个 PDF，
+  带数据/推断/文献三层证据。
+</p>
+
+<footer>
+  scellrun 生成。注释默认：deterministic panel 打分，可选 LLM 第二意见，可选 PubMed 文献。最终判断在你。
+</footer>
+
+</body>
+</html>

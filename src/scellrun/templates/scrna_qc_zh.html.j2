@@ -72,6 +72,23 @@
 {% endfor %}
 </dl>
 
+<h2>阈值敏感性</h2>
+<p style="font-size:.9rem; color:#666;">
+  在不同候选阈值下分别有多少细胞通过——直接从已有 per-cell 指标算出来，不重跑。
+  用这张表判断"默认值适不适合你的数据集"。
+</p>
+{% for knob, rows in sensitivity.items() %}
+<h3 style="font-size:1rem; margin-top:1rem;">{{ knob }}</h3>
+<table>
+<thead><tr><th>阈值</th><th>通过的细胞数</th><th>占比</th></tr></thead>
+<tbody>
+{% for row in rows %}
+<tr><td>{{ row.threshold }}</td><td>{{ "{:,}".format(row.n_pass) }}</td><td>{{ "%.1f"|format(row.pct_pass) }}%</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endfor %}
+
 {% if n_top_flagged > 0 %}
 <h2>未通过的前 {{ n_top_flagged }} 个细胞</h2>
 <p style="font-size: .9rem; color: #666;">
