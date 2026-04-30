@@ -472,8 +472,9 @@ def annotate_self_check(
                     stage="annotate",
                     code="annotate_panel_tissue_mismatch",
                     trigger=(
-                        f"{n_immune_clusters}/{len(annotations)} clusters have >=2 immune-cell "
-                        "marker hints in their top markers, but the chondrocyte_markers panel "
+                        f"{n_immune_clusters}/{len(annotations)} clusters have "
+                        f">={ANNOTATE_IMMUNE_HITS_PER_CLUSTER} immune-cell marker hint(s) "
+                        "in their top markers, but the chondrocyte_markers panel "
                         "doesn't define immune groups"
                     ),
                     suggestion=(

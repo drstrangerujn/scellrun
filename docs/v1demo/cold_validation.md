@@ -463,3 +463,149 @@ gaps to close before tagging:
    have to infer from context, and the labels can be wrong-tissue
    when the panel auto-pick fails.
 
+## Re-validation against v1.1.0 fixes
+
+Re-ran the same BML_1 prompt against v1.1.0 on the hospital server.
+Goal: confirm the three gaps the v1.0.1 cold-agent run uncovered are
+actually closed in code, not just in the changelog.
+
+### Setup
+
+```
+ssh hospital
+conda create -n scellrun-coldval-v1.1 python=3.11 -y
+# repo cloned via rsync from local main @ 35fd6df (github fetch
+# blocked by hospital network — the v1.1 source is identical to main
+# at 35fd6df verified by `git log` on hospital).
+cd /tmp/scellrun-v1.1-source && pip install -e .
+scellrun --version  # → "scellrun 1.1.0"
+mkdir -p ~/scellrun_coldval_v1_1
+scellrun scrna convert ~/Gtest/R_data/南方医科大软骨下骨/seurat/BML_1/ \
+    -o ~/scellrun_coldval_v1_1/BML_1.h5ad
+# loaded: 12,451 cells × 33,538 genes — same input as v1.0 baseline
+```
+
+Then the same one-liner the v1.0 cold run used:
+
+```
+scellrun analyze BML_1.h5ad \
+    --profile joint-disease --tissue "OA cartilage" \
+    --auto-fix --no-ai
+```
+
+Run dir: `scellrun_out/run-20260430-190328/`. ~6 min wall, same QC
+pass-rate (10,835 / 12,451 = 87.0%), same res-pick (0.3, 13 clusters).
+
+### Gap 1 — auto-pick swap
+
+**Closed.** v1.0 stdout said "panel chondrocyte_markers"; v1.1.0 stdout
+says "panel celltype_broad". The decision row that matters
+(`00_decisions.jsonl`):
+
+```json
+{"stage":"analyze","key":"annotate.auto_panel","value":"celltype_broad",
+ "source":"auto","rationale":"swapped to celltype_broad: chondrocyte_hits=7,
+ broad_hits=11; required >=1.5x margin to keep chondrocyte panel."}
+```
+
+The new rationale carries the cluster-level hit counts (7 vs 11) and
+explains the threshold verbatim. Under the v1.0 rule (count clusters
+with broad-only hits and fire on >50%), only 0/13 clusters were
+broad-only because every cluster picked up at least one weak
+chondrocyte hit; the v1.1.0 1.5x-margin rule sees 7 < 1.5 × 11 = 16.5
+and swaps.
+
+The downstream `04_annotate/annotations.csv` confirms the swap was the
+right call: cluster 0 = Endothelial cells, cluster 1 = Macrophages,
+cluster 10 = T cells, cluster 11 = Plasma cells (MZB1+JCHAIN+IGHG1+
+CD79A score 1.00, margin 0.67), cluster 12 = mast cells. The pre-1.1.0
+labels (preInfC for endothelial, InfC for macrophage, Unassigned for
+T / plasma / mast clusters) are gone.
+
+### Gap 2 — `annotate_panel_tissue_mismatch` self-check
+
+**Closed (verified on the negative path).** When the orchestrator
+auto-picked celltype_broad on the first run, the self-check that fires
+only against `panel_name == "chondrocyte_markers"` correctly stayed
+silent — that's by design, not a regression.
+
+To verify the self-check actually fires when the chondrocyte panel
+genuinely is the running panel, I forced the bad path with a manual
+per-stage call:
+
+```
+scellrun scrna annotate \
+    scellrun_out/run-20260430-190328/02_integrate/integrated.h5ad \
+    --profile joint-disease --panel chondrocyte_markers \
+    --resolution 0.3 --tissue "subchondral bone marrow" \
+    --force --no-write-h5ad \
+    -o scellrun_out/run-20260430-190328/04_annotate_chondro_test
+```
+
+Decision-log self-check rows from that run:
+
+```json
+{"stage":"annotate","key":"self_check.annotate_panel_tissue_mismatch.trigger",
+ "value":"annotate_panel_tissue_mismatch","source":"auto",
+ "rationale":"10/13 clusters have >=1 immune-cell marker hint(s) in
+ their top markers, but the chondrocyte_markers panel doesn't define
+ immune groups"}
+{"stage":"annotate","key":"self_check.annotate_panel_tissue_mismatch.suggest",
+ "value":"switch --panel to celltype_broad","source":"auto",
+ "rationale":"...","fix_payload":{"panel_name":"celltype_broad"}}
+```
+
+10/13 clusters ≈ 77%, comfortably above the v1.1.0 40% trigger floor
+(was 1/13 ≈ 7.7% under v1.0's >=2-hit shortlist; v1.1.0's broadened
+HLA-DR / plasma IGs / mast tryptases / B CD37 / dendritic CD1C list
+catches them). The structured `fix_payload: {"panel_name":
+"celltype_broad"}` is in place; the orchestrator's existing
+`--auto-fix` retry path (analyze.py:1014) consumes that payload and
+swaps the panel.
+
+So both v1.1.0 safety nets work: the auto-pick takes care of the
+common case (gap 1), and the self-check is the safety net for cases
+the auto-pick somehow misses or that arrive at annotate via a direct
+per-stage call (gap 2).
+
+### Gap 3 — `source="user"` no longer false-tagged
+
+**Closed.** v1.0 logged the orchestrator-injected panel as:
+
+```json
+{"stage":"annotate","key":"panel","value":"chondrocyte_markers",
+ "source":"user","rationale":"--panel 'chondrocyte_markers' forced"}
+```
+
+v1.1.0 logs the same row as:
+
+```json
+{"stage":"annotate","key":"panel","value":"celltype_broad",
+ "source":"auto","rationale":"orchestrator-injected panel 'celltype_broad'
+ (auto-pick or self-check fix)"}
+```
+
+The `panel_name_user_supplied=False` flag passed by `analyze.py` carries
+intent through to `Decision.from_choice`, and the rationale string honestly
+says the panel came from the auto-pick step rather than from a user `--panel`
+flag.
+
+### Verdict
+
+Three gaps closed. The pipeline now lands the right panel on a textbook
+"joint-disease profile + immune-rich subchondral-bone marrow data"
+case, and the decision log says what scellrun actually did instead of
+falsely attributing the choice to the user.
+
+The cluster labels in `04_annotate/annotations.csv` are now defensible
+to a clinician reading them: macrophages, T cells, NK, B cells, plasma
+cells, mast cells, plasmacytoid DCs, osteoclasts, endothelial,
+pericytes, and the lone fibroblast cluster all line up with the
+top-marker signatures you'd expect for a BML aspirate. The fragile
+v1.0 path (most clusters mislabeled as some chondrocyte subtype) is
+gone.
+
+Recommendation: **tag v1.1.0**. Behaviorally, the gaps are closed,
+the rationales are honest, and the existing test surface
+(`tests/test_annotate.py`, `tests/test_self_check.py`,
+`tests/test_decisions.py`) has new fixtures pinning each fix.
