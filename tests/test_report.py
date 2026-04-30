@@ -1,10 +1,7 @@
 """Tests for the multi-stage report aggregator."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from scellrun.report import _scan_stage, build_report
 from scellrun.runlayout import write_run_meta
