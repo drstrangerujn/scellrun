@@ -66,6 +66,22 @@
 <h2>Per-metric distribution (cells)</h2>
 {{ metrics_html | safe }}
 
+<h2>Why cells were flagged</h2>
+<dl class="kv">
+{% for reason, n in flag_breakdown.items() %}
+  <dt>{{ reason }}</dt> <dd>{{ "{:,}".format(n) }} cell{{ "s" if n != 1 else "" }}</dd>
+{% endfor %}
+</dl>
+
+{% if n_top_flagged > 0 %}
+<h2>Top {{ n_top_flagged }} flagged cells</h2>
+<p style="font-size: .9rem; color: #666;">
+  Worst offenders, sorted by pct_mt (desc) then n_genes (asc). The
+  <code>why_flagged</code> column lists which threshold(s) the cell failed.
+</p>
+{{ top_flagged_html | safe }}
+{% endif %}
+
 <h2>Next step</h2>
 <p>
   Inspect the per-cell CSV next to this report (<code>per_cell_metrics.csv</code>). When you're happy with the cuts, load <code>qc.h5ad</code> in scanpy and subset on <code>obs.scellrun_qc_pass</code>: <code>adata = adata[adata.obs.scellrun_qc_pass]</code>. v0.2 <code>scellrun scrna integrate</code> will read <code>qc.h5ad</code> directly from this directory.

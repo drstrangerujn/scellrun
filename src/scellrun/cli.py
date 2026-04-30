@@ -42,6 +42,37 @@ def main(
     pass
 
 
+@scrna_app.command("convert")
+def scrna_convert(
+    input_path: Path = typer.Argument(..., exists=True, readable=True, help="Input file or directory (10x mtx dir / .h5 / .loom / .csv / .tsv / .h5ad)."),
+    output: Path = typer.Option(..., "--out", "-o", help="Output .h5ad path."),
+    fmt: str = typer.Option("auto", "--format", "-f", help="Input format. 'auto' tries to detect from extension/contents."),
+) -> None:
+    """
+    Convert raw single-cell input (10x mtx dir, cellranger .h5, loom, csv, tsv)
+    into the .h5ad format that scellrun expects.
+
+    Most users have cellranger output sitting on disk and don't want to write
+    Python to load it. This command is the first mile.
+    """
+    from scellrun.scrna.convert import UnsupportedInputError, convert
+
+    valid = {"auto", "10x_mtx", "10x_h5", "loom", "csv", "tsv", "h5ad"}
+    if fmt not in valid:
+        console.print(f"[red]error:[/red] --format must be one of {sorted(valid)}")
+        raise typer.Exit(2) from None
+
+    console.print(f"[bold]scellrun scrna convert[/bold]  •  format=[cyan]{fmt}[/cyan]")
+    console.print(f"reading [dim]{input_path}[/dim]")
+    try:
+        adata = convert(input_path, output, fmt=fmt)  # type: ignore[arg-type]
+    except UnsupportedInputError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
+    console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+    console.print(f"wrote: {output}")
+
+
 @scrna_app.command("qc")
 def scrna_qc(
     h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input .h5ad file."),

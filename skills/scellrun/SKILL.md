@@ -97,24 +97,41 @@ Adding a profile is one PR adding one Python file under
 `src/scellrun/profiles/`. If a user has tissue-specific working practice,
 encourage them to contribute it.
 
-## Common pitfalls
+## Hard rules for the agent (don't break these)
 
-1. **Don't hand the user a "filtered" h5ad.** They asked for QC, give them the
-   report + qc_pass column. Filtering is their decision.
-2. **Don't auto-drop doublets.** Default is flag-only. Same reason.
-3. **Don't override profile defaults silently.** If you pass `--max-genes 4500`,
-   tell the user why you raised the cap (e.g., osteoclasts are multinucleate).
-4. **Joint-disease profile defaults assume cartilage/synovium.** If the user is
-   doing PBMC, switch to `--profile default`.
-5. **mt% threshold is intentionally 20% for default profile**, not the textbook
-   10%. This is on purpose — joint and other stress-prone tissues lose real
-   cells at 10%. If the user asks "why not 10%?", explain rather than cave.
+1. **Don't write your own scanpy / scrublet code when scellrun already covers the step.** The whole point is that scellrun encodes opinionated decisions; rolling your own with different defaults silently undoes that. If the user's request maps to a scellrun command, call the command.
+
+2. **Don't silently filter cells.** scellrun's policy is *flag, don't drop*. After QC, `qc.h5ad` contains ALL cells with a `scellrun_qc_pass` boolean column. Hand the user the report + h5ad and let them decide cuts. Never call `adata = adata[adata.obs.scellrun_qc_pass]` on the user's behalf.
+
+3. **Don't override profile defaults without saying so.** If you pass `--max-genes 4500` because the user has multinucleate cells (osteoclasts, etc.), tell the user *why* you raised the cap. The defaults are intentional, not arbitrary.
+
+4. **Don't assume raw counts.** scellrun warns if X looks log-normalized and skips scrublet in that case. If you see that warning in the output, surface it to the user — don't bury it. They probably want to re-run on the raw matrix.
+
+## Loading raw inputs (10x mtx, cellranger .h5, .loom, etc.)
+
+Don't write `sc.read_10x_mtx(...)` yourself. Use the convert command:
+
+```bash
+scellrun scrna convert path/to/cellranger_out -o data.h5ad
+scellrun scrna qc data.h5ad
+```
+
+It auto-detects the format and produces a clean h5ad with unique var names.
+Supported: 10x mtx directory / cellranger .h5 / .loom / .csv / .tsv / .h5ad.
+
+## Other pitfalls
+
+- **Joint-disease profile defaults assume cartilage/synovium.** If the user is
+  doing PBMC, switch to `--profile default`.
+- **mt% threshold is intentionally 20% for default profile**, not the textbook
+  10%. This is on purpose — joint and other stress-prone tissues lose real
+  cells at 10%. If the user asks "why not 10%?", explain rather than cave.
 
 ## When NOT to invoke
 
 - Pure pandas/numpy work
-- Non-h5ad inputs (10x mtx, loom, raw fastq) — direct user to load with scanpy first, save .h5ad, then call scellrun
 - Bulk RNA-seq, ATAC-seq, spatial — not in scope yet
+- Raw fastq input — that needs cellranger or starsolo first; scellrun starts post-cellranger
 
 ## Source of truth
 

@@ -56,6 +56,8 @@ class QCResult:
     metrics: pd.DataFrame
     thresholds: ScrnaQCThresholds
     raw_counts_check: str  # 'looks_like_raw' | 'looks_like_normalized' | 'unknown'
+    flag_breakdown: dict[str, int]  # which threshold rejected how many cells
+    top_flagged: pd.DataFrame  # up to 20 worst-offender cells with reasons
 
 
 class InvalidInputError(ValueError):
@@ -194,6 +196,49 @@ def run_qc(
         ]
     ].describe(percentiles=[0.05, 0.5, 0.95]).T
 
+    # Flag breakdown: how many cells failed each threshold
+    flag_breakdown = {
+        "min_genes":  int((~obs["scellrun_qc_pass_min_genes"]).sum()),
+        "max_genes":  int((~obs["scellrun_qc_pass_max_genes"]).sum()),
+        "min_counts": int((~obs["scellrun_qc_pass_min_counts"]).sum()),
+        "max_pct_mt": int((~obs["scellrun_qc_pass_pct_mt"]).sum()),
+        "max_pct_ribo": int((~obs["scellrun_qc_pass_pct_ribo"]).sum()),
+        "max_pct_hb": int((~obs["scellrun_qc_pass_pct_hb"]).sum()),
+    }
+
+    # Top flagged: 20 worst offenders with the reason annotated
+    failing = obs[~obs["scellrun_qc_pass"]].copy()
+    if len(failing) > 0:
+        reasons = []
+        for _, row in failing.iterrows():
+            why = []
+            if not row["scellrun_qc_pass_min_genes"]:
+                why.append(f"n_genes {int(row['n_genes_by_counts'])} < {thresholds.min_genes}")
+            if not row["scellrun_qc_pass_max_genes"]:
+                why.append(f"n_genes {int(row['n_genes_by_counts'])} > {thresholds.max_genes}")
+            if not row["scellrun_qc_pass_min_counts"]:
+                why.append(f"counts {int(row['total_counts'])} < {thresholds.min_counts}")
+            if not row["scellrun_qc_pass_pct_mt"]:
+                why.append(f"mt {row['pct_counts_mt']:.1f}% > {thresholds.max_pct_mt}%")
+            if not row["scellrun_qc_pass_pct_ribo"]:
+                why.append(f"ribo {row['pct_counts_ribo']:.1f}% > {thresholds.max_pct_ribo}%")
+            if not row["scellrun_qc_pass_pct_hb"]:
+                why.append(f"hb {row['pct_counts_hb']:.1f}% > {thresholds.max_pct_hb}%")
+            reasons.append("; ".join(why))
+        failing["why_flagged"] = reasons
+        # rank by "how badly they failed": sum of normalized z-scores on the
+        # offending metric. Cheap proxy: high pct_mt + low n_genes are the
+        # usual culprits, just sort by pct_mt then n_genes.
+        top_flagged = (
+            failing[["n_genes_by_counts", "total_counts", "pct_counts_mt", "pct_counts_hb", "why_flagged"]]
+            .sort_values(["pct_counts_mt", "n_genes_by_counts"], ascending=[False, True])
+            .head(20)
+        )
+    else:
+        top_flagged = pd.DataFrame(
+            columns=["n_genes_by_counts", "total_counts", "pct_counts_mt", "pct_counts_hb", "why_flagged"]
+        )
+
     return QCResult(
         n_cells_in=n_cells_in,
         n_cells_pass=int(obs["scellrun_qc_pass"].sum()),
@@ -206,6 +251,8 @@ def run_qc(
         metrics=metrics,
         thresholds=thresholds,
         raw_counts_check=raw_check,
+        flag_breakdown=flag_breakdown,
+        top_flagged=top_flagged,
     )
 
 
@@ -257,6 +304,9 @@ def write_artifacts(
         metrics_html=result.metrics.to_html(float_format=lambda x: f"{x:.2f}"),
         n_cells_dropped=result.n_cells_in - result.n_cells_pass,
         raw_counts_check=result.raw_counts_check,
+        flag_breakdown=result.flag_breakdown,
+        top_flagged_html=result.top_flagged.to_html(float_format=lambda x: f"{x:.2f}"),
+        n_top_flagged=len(result.top_flagged),
     )
 
     html_path = out_dir / "report.html"
