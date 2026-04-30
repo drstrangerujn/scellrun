@@ -17,6 +17,15 @@ If a request involves an `.h5ad`, a 10x mtx directory, a cellranger `.h5`
 output, a `.loom`, or a tsv/csv expression matrix — you should be
 reaching for scellrun, not writing scanpy boilerplate.
 
+## Verification status
+
+This document was last validated against scellrun v1.0.0 on 2026-04-30.
+The reference end-to-end behavior is captured in `docs/agent-demo.md`
+at the repo root, which is a real run on real OA cartilage data. If
+you (the agent) reach a different conclusion from what's in
+agent-demo.md on the same input, ASSUME this document is stale, not
+that you're wrong; tell the user to check the repo for updates.
+
 ## Decision tree: which command for which intent
 
 | User intent | Command |
@@ -56,6 +65,22 @@ What the flags do:
   suggestion and let the user agree before re-running, unless the user
   said "just fix it".
 
+### `--method` and single-sample auto-degrade (v0.9.1)
+
+`--method harmony` is the default. If you don't pass `--method`
+explicitly and the input has no sample/batch column (`orig.ident`,
+`sample`, `batch`, `donor`) — or every value in such a column is
+identical — scellrun auto-downgrades `--method` from `harmony` to
+`none` (`harmony→none`) rather than crashing 1m+ into the run. This is logged as a
+`source="auto"`, `key="method_downgrade"` row on the `analyze` stage
+with the rationale verbatim.
+
+You (the agent) do NOT need to detect single-sample yourself. Just
+call `analyze` and look at the decision log to confirm what method
+actually ran. If the user explicitly wants harmony on a single-sample
+input (rare, usually a mistake), pass `--method harmony` to override
+the auto-downgrade.
+
 Output goes to `./scellrun_out/run-YYYYMMDD-HHMMSS/`. The single thing
 you (the agent) open afterward is:
 
@@ -73,20 +98,44 @@ number that index.html does not surface.
 `<run-dir>/00_decisions.jsonl` is the single source of truth for every
 non-trivial choice the pipeline made. One JSON object per line. Sample
 shape (synthetic, but the keys and value types are exactly what you'll
-see):
+see in v0.9.1+):
 
 ```jsonl
-{"stage":"qc","key":"profile","value":"joint-disease","default":"default","source":"user","rationale":"user passed --profile joint-disease (cartilage tissue)","ts":"2026-04-30T09:45:30+00:00"}
-{"stage":"qc","key":"max_pct_mt","value":20.0,"default":20.0,"source":"auto","rationale":"joint-tissue-aware default; 10% loses real stressed cells","ts":"2026-04-30T09:45:30+00:00"}
-{"stage":"qc","key":"max_genes","value":4500,"default":4000,"source":"user","rationale":"user override --max-genes 4500 (multinucleate cells expected)","ts":"2026-04-30T09:45:30+00:00"}
-{"stage":"integrate","key":"sample_key","value":"orig.ident","default":null,"source":"auto","rationale":"auto-detected from obs columns (orig.ident / sample / batch / donor priority)","ts":"2026-04-30T09:46:12+00:00"}
-{"stage":"integrate","key":"resolution_recommended","value":0.5,"default":null,"source":"ai","rationale":"LLM picked 0.5 from the sweep — best separation of chondrocyte subtypes vs over-splitting at 0.8","ts":"2026-04-30T09:48:01+00:00"}
-{"stage":"annotate","key":"panel_name","value":"chondrocyte_markers","default":null,"source":"auto","rationale":"profile joint-disease ships chondrocyte_markers; auto-picked over celltype_broad based on tissue context","ts":"2026-04-30T09:49:33+00:00"}
-{"stage":"qc","key":"self_check.qc_low_pass_rate.trigger","value":"qc_low_pass_rate","default":null,"source":"auto","rationale":"only 24.3% of cells passed QC (608/2500); below the 30% trigger threshold","ts":"2026-04-30T09:45:30+00:00"}
-{"stage":"qc","key":"self_check.qc_low_pass_rate.suggest","value":"raise --max-pct-mt to 25.0","default":null,"source":"auto","rationale":"raising --max-pct-mt from 20 to 25 would let 62% of cells pass that single test (sensitivity sweep, smallest relaxation reaching 60%)","ts":"2026-04-30T09:45:30+00:00"}
+{"schema_version":1,"stage":"qc","key":"profile","value":"joint-disease","default":"default","source":"user","rationale":"user passed --profile joint-disease (cartilage tissue)","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
+{"schema_version":1,"stage":"qc","key":"max_pct_mt","value":20.0,"default":20.0,"source":"auto","rationale":"joint-tissue-aware default; 10% loses real stressed cells","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
+{"schema_version":1,"stage":"qc","key":"max_genes","value":4500,"default":4000,"source":"user","rationale":"user override --max-genes 4500 (multinucleate cells expected)","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
+{"schema_version":1,"stage":"analyze","key":"method_downgrade","value":"none","default":"harmony","source":"auto","rationale":"no sample/batch column (orig.ident/sample/batch/donor) in obs — single-sample input; auto-downgraded --method from harmony to none. Pass --method harmony explicitly to force the original behavior.","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:46:01+00:00"}
+{"schema_version":1,"stage":"integrate","key":"sample_key","value":"orig.ident","default":null,"source":"auto","rationale":"auto-detected from obs columns (orig.ident / sample / batch / donor priority)","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:46:12+00:00"}
+{"schema_version":1,"stage":"integrate","key":"resolution_recommended","value":0.5,"default":null,"source":"ai","rationale":"LLM picked 0.5 from the sweep — best separation of chondrocyte subtypes vs over-splitting at 0.8","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:48:01+00:00"}
+{"schema_version":1,"stage":"annotate","key":"panel_name","value":"chondrocyte_markers","default":null,"source":"auto","rationale":"profile joint-disease ships chondrocyte_markers; auto-picked over celltype_broad because chondrocyte hits dominate the top markers","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:49:33+00:00"}
+{"schema_version":1,"stage":"qc","key":"self_check.qc_low_pass_rate.trigger","value":"qc_low_pass_rate","default":null,"source":"auto","rationale":"only 44.3% of cells passed QC (1108/2500); below the 60% trigger threshold","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
+{"schema_version":1,"stage":"qc","key":"self_check.qc_low_pass_rate.suggest","value":"raise --max-pct-mt to 25.0","default":null,"source":"auto","rationale":"raising --max-pct-mt from 20 to 25 would let 62% of cells pass that single test (sensitivity sweep, smallest relaxation reaching 60%)","fix_payload":{"max_pct_mt":25.0},"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
 ```
 
-How to use it when explaining results to the user:
+What the v0.9.1 schema fields buy you:
+
+- `schema_version` is the shape version of the row. Current value is
+  `1`. If you see a row with `schema_version` higher than the version
+  this document describes, REFUSE to parse it — the shape may have
+  changed in incompatible ways. Tell the user the SKILL.md is older
+  than the run-dir and to check the repo for updates.
+- `attempt_id` is unique per `analyze` invocation (or per per-stage
+  CLI run). Use it to group rows that came from the same attempt. When
+  `--auto-fix` retries a stage, the retry's rows share the same
+  `attempt_id` as the first pass — that's by design; both attempts
+  belong to the same `analyze` invocation. A `--force` re-run from the
+  CLI generates a new `attempt_id`.
+- `fix_payload` is non-null only on self-check `*.suggest` rows. It
+  carries the structured fix dict (e.g. `{"max_pct_mt": 25.0}`,
+  `{"resolutions": "aio"}`, `{"panel_name": "celltype_broad"}`) that
+  the orchestrator can mechanically apply when `--auto-fix` is on.
+  Agents can read `fix_payload` directly to apply or quote the fix
+  without parsing the rationale prose. The `value` field on the same
+  row is still a human-readable rendering of the fix ("raise
+  `--max-pct-mt` to 25.0"); use `value` to talk to the user, use
+  `fix_payload` to talk to other tools.
+
+How to use the log when explaining results to the user:
 
 1. **Group by stage.** The report's first page already does this; if the
    user is in the terminal, render a small markdown table grouped by
@@ -114,12 +163,14 @@ to try). The pair shape is shown in the sample above (`qc_low_pass_rate`).
 How to handle them:
 
 - **Always surface a `.trigger` row to the user.** Do not bury it. Open
-  with the trigger rationale in plain language ("only 24% of cells
-  passed QC, which is below scellrun's 30% trigger") before you say
+  with the trigger rationale in plain language ("only 44% of cells
+  passed QC, which is below scellrun's 60% trigger") before you say
   anything about what the data shows.
 - **Translate the paired `.suggest` row into a recommendation.** The
   `value` field is already a human-readable instruction ("raise
-  `--max-pct-mt` to 25"). Read the `rationale` for the reasoning.
+  `--max-pct-mt` to 25"). Read the `rationale` for the reasoning. The
+  paired `fix_payload` is the structured form (apply mechanically; do
+  not paraphrase before quoting back to the user).
 - **Ask before re-running** unless the user pre-authorized it. If the
   user says "fix it" or "go ahead", re-run with `--auto-fix` (which
   applies the structured fix and reruns just that stage, capped at one
@@ -129,17 +180,54 @@ How to handle them:
   practice, often signals upstream problems (bad dissociation, wrong
   panel, dominant cell-cycle artifact). Surface it.
 
+### `.failed-N/` directories from `--auto-fix` retries (v0.9.1)
+
+When `--auto-fix` triggers a stage retry, scellrun preserves the failed
+first-pass artifacts under `<NN_stage>.failed-1/` next to the retry's
+fresh output in `<NN_stage>/`. Concretely, if QC pass-rate triggers a
+retry, you'll end up with:
+
+```
+scellrun_out/run-20260430-094530/
+    01_qc/                  retry's report.html, qc.h5ad, per_cell_metrics.csv
+    01_qc.failed-1/         original failed report.html, qc.h5ad, per_cell_metrics.csv
+    02_integrate/
+    ...
+```
+
+How to use this:
+
+- If the user asks to compare the original failed state vs the retry,
+  the `.failed-N/` dir has the original `report.html` and `*.h5ad`.
+  Open both and walk them through the diff.
+- The decision log carries an `auto_fix.<stage>.outcome` row that says
+  "retry rescued the stage" or "did not improve" explicitly. **Read
+  that row before you tell the user the retry fixed anything.**
+- If `outcome` says "did not improve" (e.g. QC pass-rate stayed below
+  the threshold even after relaxation, or cluster counts still ≤ 2
+  after the wider sweep), do NOT pretend the retry fixed it. Surface
+  the failure plainly and either suggest a different fix or hand the
+  decision back to the user.
+- The `.failed-N/` numbering bumps to `.failed-2`, `.failed-3`, … if
+  somebody re-runs `--auto-fix` again on a run-dir that already has a
+  `.failed-1` (defensive; you usually won't see N > 1 in the wild).
+
 The trigger codes you will see and what they mean:
 
 | code | stage | what fires it | structured fix |
 | --- | --- | --- | --- |
-| `qc_low_pass_rate` | qc | < 30% of cells passed QC, and a single threshold relaxation could push past 60% | `{max_pct_mt: ...}` or `{max_genes: ...}` |
-| `qc_low_pass_rate_no_easy_fix` | qc | < 30% passed and no single relaxation gets to 60% | none — human review needed |
-| `integrate_too_few_clusters` | integrate | every requested resolution yielded ≤ 2 clusters | `{resolutions: "aio"}` |
+| `qc_low_pass_rate` | qc | < 60% of cells passed QC, and a single threshold relaxation could push past 60% | `{max_pct_mt: ...}` or `{max_genes: ...}` |
+| `qc_low_pass_rate_no_easy_fix` | qc | < 60% passed and no single relaxation gets to 60% | none — human review needed |
+| `integrate_too_few_clusters` | integrate | every requested resolution yielded ≤ 2 clusters (skipped on n_cells < 500) | `{resolutions: "aio"}` |
 | `integrate_dominant_cluster` | integrate | the largest cluster > 50% at every resolution and cell-cycle regression is off | `{regress_cell_cycle: true}` |
 | `annotate_ambiguous_panel` | annotate | every cluster's panel margin < 0.05; an alternate panel is available on the profile | `{panel_name: ...}` |
 | `annotate_ambiguous_no_alt_panel` | annotate | margins < 0.05 and no alternate panel | none — switch profiles |
 | `annotate_panel_tissue_mismatch` | annotate | chondrocyte panel chosen but most clusters have immune-marker top genes | `{panel_name: "celltype_broad"}` |
+
+The QC trigger ceiling was raised from 30% (v0.8) to 60% (v0.9.1) so
+the degraded-prep band fires too. Real OA samples routinely sit at
+40-55% pass on default thresholds because joint tissue is stress-prone;
+that's prime suggestion territory.
 
 ## Profile selection guidance
 
@@ -161,6 +249,39 @@ If the user mentions a tissue keyword, pick the matching profile. Do
 not default to `default` and let the broad panel run when a tissue-
 specific profile exists. If the user's tissue has no matching profile,
 use `default` and tell them — adding a profile is a one-PR contribution.
+
+### Panel auto-selection inside `joint-disease` (v0.9.1)
+
+The `joint-disease` profile ships two annotation panels: the Fan 2024
+`chondrocyte_markers` (11 chondrocyte subtypes) and a broad
+`celltype_broad` panel (15-group: chondrocytes, fibroblasts,
+endothelial, pericytes, macrophages, T/B/NK/plasma cells, etc.). Old
+behavior was to always prefer `chondrocyte_markers` on this profile,
+which mis-labels subchondral-bone or synovium datasets where most
+clusters are immune.
+
+v0.9.1 adds an auto-pick step (`_autopick_panel_for_data`): at the
+chosen resolution, scellrun looks at each cluster's top markers and
+counts which clusters hit only the `celltype_broad` gene set without
+hitting `chondrocyte_markers`. If more than 50% of clusters fall in
+the celltype_broad-only bucket, scellrun swaps the panel to
+`celltype_broad` rather than mis-labeling the dataset.
+
+What this means for you (the agent):
+
+- `--profile joint-disease` is safe to use even when the dataset turns
+  out to be immune-rich (subchondral bone, synovium, fluid). scellrun
+  will swap panels rather than blindly run the chondrocyte panel.
+- The decision log row `analyze.annotate.auto_panel` records which
+  panel was picked AND the rationale. For a swap you'll see something
+  like: `value=celltype_broad`, `rationale="9/13 clusters (69%) have
+  celltype_broad hits without chondrocyte_markers hits — auto-picked
+  celltype_broad"`. For the chondrocyte default you'll see:
+  `value=chondrocyte_markers`, `rationale="fine-subtype panel preferred
+  (chondrocyte hits dominate or are tied)"`.
+- If you (the agent) want to override the auto-pick, pass `--panel
+  chondrocyte_markers` or `--panel celltype_broad` to the per-stage
+  `scrna annotate` command. This shows up as a `source="user"` row.
 
 ## Finding the data
 
@@ -242,9 +363,11 @@ scellrun analyze data.h5ad --ai
 
 ## Failure modes & how to handle them
 
-- **QC pass-rate < 30%.** Self-check fires `qc_low_pass_rate`. Quote
-  the suggestion ("raise `--max-pct-mt` to N"); ask the user; re-run
-  with `--auto-fix` if they agree.
+- **QC pass-rate < 60%.** Self-check fires `qc_low_pass_rate` (the
+  trigger ceiling was raised from 30% in v0.8 to 60% in v0.9.1 to
+  catch the degraded-prep band). Quote the suggestion ("raise
+  `--max-pct-mt` to N"); ask the user; re-run with `--auto-fix` if
+  they agree.
 - **Every resolution has ≤ 2 clusters.** Self-check fires
   `integrate_too_few_clusters`. Suggested fix is `--resolutions aio`
   (the 13-step AIO sweep from 0.01 to 2.0). The default sweep tops out

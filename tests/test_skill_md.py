@@ -1,5 +1,5 @@
 """
-Schema-level tests for skills/scellrun/SKILL.md (v0.9).
+Schema-level tests for skills/scellrun/SKILL.md (v1.0).
 
 These check structure and presence of required topics, not phrasing —
 the SKILL.md content is allowed to evolve as long as agents can still
@@ -55,6 +55,18 @@ def test_frontmatter_name_and_description(skill_text: str) -> None:
         "joint-disease",
         "--ai",
         "--auto-fix",
+        # v0.9.1 decision-log schema fields that an agent must know about.
+        "schema_version",
+        "attempt_id",
+        "fix_payload",
+        # v0.9.1 raised the QC self-check trigger ceiling from 30% to 60%.
+        "60%",
+        # v0.9.1 preserves failed first-pass artifacts when --auto-fix retries.
+        ".failed-1",
+        # v0.9.1 single-sample auto-degrade for the integrate stage.
+        "harmony→none",
+        # v1.0 honesty: a "Verification status" section pinning to v1.0.0.
+        "Verification status",
     ],
 )
 def test_body_mentions_required_topics(skill_text: str, needle: str) -> None:
