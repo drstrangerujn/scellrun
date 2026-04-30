@@ -21,15 +21,22 @@ def planted_h5ad(tmp_path):
     """
     rng = np.random.default_rng(0)
     n_cells, n_genes = 200, 500
-    # Raw integer counts so the QC raw-counts heuristic is happy.
-    counts = rng.poisson(lam=2.0, size=(n_cells, n_genes)).astype(np.int32)
-    # Plant a strong group-A signal in cols 50..70, group-B signal in cols 70..90.
-    counts[:100, 50:70] = rng.poisson(lam=20.0, size=(100, 20))
-    counts[100:, 70:90] = rng.poisson(lam=20.0, size=(100, 20))
-    # A handful of high-expressed "background" genes in the first 10 cols
-    counts[:, :10] = rng.poisson(lam=15.0, size=(n_cells, 10))
+    # Per-gene mean drawn from a Gamma to break the all-Poisson uniformity
+    # that makes scanpy's seurat HVG flavor explode (log of zero dispersion).
+    # Per-cell scaling adds another axis of variability so total_counts is
+    # not constant. Result: real, well-behaved count distributions.
+    gene_means = rng.gamma(shape=2.0, scale=1.5, size=n_genes).astype(np.float32) + 0.3
+    cell_scaling = rng.gamma(shape=4.0, scale=0.25, size=n_cells).astype(np.float32) + 0.5
+    lam = np.outer(cell_scaling, gene_means)  # 200 x 500
+    counts = rng.poisson(lam=lam).astype(np.int32)
+    # Plant strong cluster-A signal in cols 50..70, cluster-B signal in cols 70..90.
+    counts[:100, 50:70] = rng.poisson(lam=25.0, size=(100, 20))
+    counts[100:, 70:90] = rng.poisson(lam=25.0, size=(100, 20))
 
     a = ad.AnnData(X=counts.astype(np.float32))
+    # MT/HB/RPS gene names exist for QC annotation, but they sit on the
+    # background lambda — they don't dominate per-cell counts, so most
+    # cells pass the joint-disease profile's tight hb=2%/mt=20% ceilings.
     a.var_names = (
         [f"MT-CO{i}" for i in range(1, 6)]
         + [f"HBB{i}" for i in range(1, 4)]
