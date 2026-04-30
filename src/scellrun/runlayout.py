@@ -11,6 +11,7 @@ Layout:
         01_qc/
             report.html
             per_cell_metrics.csv
+            qc.h5ad              annotated AnnData; canonical handoff to v0.2 integrate
         02_integrate/            (v0.2)
         03_markers/              (v0.3)
         04_annotate/             (v0.4)
@@ -37,10 +38,29 @@ def default_run_dir() -> Path:
     return Path("scellrun_out") / f"run-{ts}"
 
 
-def stage_dir(run_dir: Path, stage: str) -> Path:
+class StageOutputExists(FileExistsError):
+    """Raised when a stage subdir already contains artifacts (and --force not set)."""
+
+
+def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
+    """
+    Resolve and create the stage subdirectory.
+
+    If artifacts already exist there (any non-hidden file) and `force` is
+    False, raise `StageOutputExists`. This guards the silent-overwrite trap
+    where re-running a stage into the same run-dir leaves the manifest
+    showing two runs but only the latest payload on disk.
+    """
     if stage not in STAGE_DIRS:
         raise ValueError(f"unknown stage {stage!r}; expected one of {list(STAGE_DIRS)}")
     p = run_dir / STAGE_DIRS[stage]
+    if p.exists():
+        existing = [f for f in p.iterdir() if not f.name.startswith(".")]
+        if existing and not force:
+            raise StageOutputExists(
+                f"{p} already has artifacts: {[f.name for f in existing]}. "
+                "Re-run with --force to overwrite, or pick a fresh --run-dir."
+            )
     p.mkdir(parents=True, exist_ok=True)
     return p
 

@@ -50,14 +50,18 @@ def scrna_qc(
     run_dir: Optional[Path] = typer.Option(None, "--run-dir", help="Run root directory. Default: scellrun_out/run-YYYYMMDD-HHMMSS."),
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Override output dir for this stage. By default, writes to <run-dir>/01_qc/."),
     assay: str = typer.Option("scrna", "--assay", help="Assay flavor: 'scrna' or 'snrna'.", show_default=True),
-    species: str = typer.Option("human", "--species", help="'human' or 'mouse' (drives downstream gene-list selection)."),
+    species: str = typer.Option("human", "--species", help="'human' or 'mouse'. Currently informational; v0.2+ uses it for cell-cycle gene lists."),
     profile: str = typer.Option("default", "--profile", "-p", help="Profile name (see `scellrun profiles list`)."),
     max_genes: Optional[int] = typer.Option(None, "--max-genes", help="Override profile max_genes upper cap."),
     flag_doublets: bool = typer.Option(True, "--flag-doublets/--no-flag-doublets", help="Run scrublet for doublet flagging."),
+    write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Also write annotated qc.h5ad (canonical handoff to v0.2 integrate)."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing artifacts in the stage dir. Default: error if 01_qc/ already has output."),
 ) -> None:
     """
-    Compute single-cell QC metrics, FLAG (don't drop) outlier cells, and emit
-    an HTML report + per-cell CSV.
+    Compute single-cell QC metrics, FLAG (don't drop) outlier cells, and emit:
+      - report.html
+      - per_cell_metrics.csv
+      - qc.h5ad  (annotated AnnData, canonical handoff for v0.2 integrate)
 
     Output goes to <run-dir>/01_qc/ so the v0.4+ pipeline can pick it up.
     """
@@ -66,8 +70,13 @@ def scrna_qc(
     import anndata as ad
 
     from scellrun.profiles import load as load_profile
-    from scellrun.runlayout import default_run_dir, stage_dir, write_run_meta
-    from scellrun.scrna.qc import run_qc, write_report
+    from scellrun.runlayout import (
+        StageOutputExists,
+        default_run_dir,
+        stage_dir,
+        write_run_meta,
+    )
+    from scellrun.scrna.qc import InvalidInputError, run_qc, write_artifacts
 
     if assay not in ("scrna", "snrna"):
         console.print(f"[red]error:[/red] --assay must be 'scrna' or 'snrna', got {assay!r}")
@@ -90,30 +99,61 @@ def scrna_qc(
 
     if run_dir is None:
         run_dir = default_run_dir()
-    out_dir = out if out is not None else stage_dir(run_dir, "qc")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if out is not None:
+        out_dir = out
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            out_dir = stage_dir(run_dir, "qc", force=force)
+        except StageOutputExists as e:
+            console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(2)
 
     console.print(
         f"[bold]scellrun scrna qc[/bold]  •  profile=[cyan]{profile}[/cyan]  "
         f"assay=[cyan]{assay}[/cyan]  species=[cyan]{species}[/cyan]"
     )
     console.print(f"run-dir: [dim]{run_dir}[/dim]")
+    console.print(f"out-dir: [dim]{out_dir}[/dim]")
+    console.print("[bold]effective thresholds:[/bold]")
+    for k, v in dataclasses.asdict(thresholds).items():
+        console.print(f"  {k:24s} {v}")
     console.print(f"reading [dim]{h5ad}[/dim]")
 
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
-    result = run_qc(adata, assay=assay, flag_doublets=flag_doublets, thresholds=thresholds)
+    try:
+        result = run_qc(
+            adata,
+            assay=assay,
+            flag_doublets=flag_doublets,
+            thresholds=thresholds,
+        )
+    except InvalidInputError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1)
+
+    if result.raw_counts_check == "looks_like_normalized":
+        console.print(
+            "[yellow]warning:[/yellow] X looks log-normalized, not raw counts. "
+            "pct_counts_* metrics may be misleading; doublet flagging skipped."
+        )
+    elif result.raw_counts_check == "unknown":
+        console.print(
+            "[yellow]note:[/yellow] could not confirm whether X is raw counts; "
+            "proceeding anyway."
+        )
 
     pct = 100 * result.n_cells_pass / max(result.n_cells_in, 1)
     console.print(
         f"QC pass: [bold green]{result.n_cells_pass:,}[/bold green] / {result.n_cells_in:,} "
         f"({pct:.1f}%) — pct_mt median {result.pct_mt_median:.2f}%, p95 {result.pct_mt_p95:.2f}%"
     )
-    if flag_doublets:
+    if flag_doublets and result.raw_counts_check != "looks_like_normalized":
         console.print(f"doublets flagged: {result.n_doublets_flagged:,}")
 
-    html_path = write_report(result, adata, out_dir)
+    artifacts = write_artifacts(result, adata, out_dir, write_h5ad=write_h5ad)
     write_run_meta(
         run_dir,
         command="scrna qc",
@@ -125,10 +165,15 @@ def scrna_qc(
             "profile": profile,
             "thresholds": thresholds,
             "flag_doublets": flag_doublets,
+            "write_h5ad": write_h5ad,
+            "force": force,
+            "raw_counts_check": result.raw_counts_check,
         },
     )
-    console.print(f"[bold]report:[/bold] [link=file://{html_path.resolve()}]{html_path}[/link]")
-    console.print(f"per-cell CSV: {out_dir / 'per_cell_metrics.csv'}")
+    console.print(f"[bold]report:[/bold] [link=file://{artifacts['report'].resolve()}]{artifacts['report']}[/link]")
+    console.print(f"per-cell CSV: {artifacts['per_cell_metrics']}")
+    if "qc_h5ad" in artifacts:
+        console.print(f"annotated h5ad: {artifacts['qc_h5ad']}")
 
 
 @profiles_app.command("list")

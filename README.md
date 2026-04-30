@@ -79,3 +79,5 @@ MIT.
 ## Acknowledgements
 
 The defaults baked into this tool are the residue of a lot of failed analyses and one or two saved nights. If they save you a similar evening, that's the goal.
+
+Built with assistance from Claude (Anthropic).
