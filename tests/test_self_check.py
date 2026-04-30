@@ -310,6 +310,66 @@ def test_annotate_self_check_low_margin_under_celltype_broad_suggests_chondrocyt
     assert amb.fix == {"panel_name": "chondrocyte_markers"}
 
 
+def test_annotate_self_check_fires_on_BML_like_immune_dominated_clusters():
+    """
+    v1.1.0 gap 2: a fixture mimicking BML_1 (mostly immune clusters with
+    HLA-DR / plasma IGs / mast tryptases / B CD37 / dendritic CD1C top
+    markers, only a couple of stromal clusters and one fibroblast) should
+    trigger annotate_panel_tissue_mismatch.
+
+    The pre-1.1.0 shortlist (CD3D/CD8A/CD19/MS4A1/CD79A/CD68/LYZ/CD14/
+    NKG7/GNLY/KLRD1/PTPRC) only caught 1/13 clusters at >=2 hits and the
+    trigger never fired. The v1.1.0 shortlist + >=1-hit + >=40% threshold
+    catches enough to fire on a 9/13 = 69% immune dataset.
+    """
+    annotations = [
+        # Most clusters from BML_1's actual top markers (cold-validation journal):
+        _FakeAnnotation(panel_margin=0.2, top_markers=["LYZ", "AIF1", "HLA-DRA", "HLA-DRB1", "TYROBP", "FCER1G", "CD74"]),  # macrophage
+        _FakeAnnotation(panel_margin=0.2, top_markers=["IL32", "CXCR4", "CCL5"]),  # T cell — only IL32-adjacent; no shortlist hit
+        _FakeAnnotation(panel_margin=0.2, top_markers=["NKG7", "KLRD1", "CTSW", "GZMA", "KLRB1", "CD7"]),  # NK / CD8
+        _FakeAnnotation(panel_margin=0.2, top_markers=["CD37", "CD79A"]),  # B cell
+        _FakeAnnotation(panel_margin=0.2, top_markers=["GZMB", "PLD4", "JCHAIN", "IRF8", "IL3RA", "IRF7"]),  # plasmacytoid DC
+        _FakeAnnotation(panel_margin=0.2, top_markers=["HLA-DPA1", "CD74", "ACTB"]),  # generic activated immune
+        _FakeAnnotation(panel_margin=0.2, top_markers=["ACP5", "CTSK", "MMP9", "CD68"]),  # osteoclast — myeloid lineage
+        _FakeAnnotation(panel_margin=0.2, top_markers=["KLRB1", "IL7R", "CD69"]),  # memory T / ILC
+        _FakeAnnotation(panel_margin=0.2, top_markers=["MZB1", "JCHAIN", "DERL3", "IGHG1", "CD79A"]),  # plasma cell
+        _FakeAnnotation(panel_margin=0.2, top_markers=["CPA3", "TPSAB1", "TPSB2", "MS4A2", "CTSG"]),  # mast cell
+        # A couple of non-immune clusters (endothelial, pericyte, fibroblast):
+        _FakeAnnotation(panel_margin=0.2, top_markers=["RAMP2", "ENG", "A2M"]),
+        _FakeAnnotation(panel_margin=0.2, top_markers=["RGS5", "MCAM", "ACTA2"]),
+        _FakeAnnotation(panel_margin=0.2, top_markers=["COL1A2", "DCN", "COL1A1"]),
+    ]
+    findings = annotate_self_check(
+        annotations=annotations,
+        panel_name="chondrocyte_markers",
+        profile_module=_FakeProfile,
+    )
+    codes = {f.code for f in findings}
+    assert "annotate_panel_tissue_mismatch" in codes, (
+        f"BML_1-shaped fixture did not fire annotate_panel_tissue_mismatch; "
+        f"codes={codes}"
+    )
+    mm = next(f for f in findings if f.code == "annotate_panel_tissue_mismatch")
+    assert mm.fix == {"panel_name": "celltype_broad"}
+    # Trigger string should carry the immune cluster count.
+    assert "immune-cell" in mm.trigger or "immune" in mm.trigger.lower()
+
+
+def test_annotate_self_check_v1_1_0_immune_hints_cover_HLA_DR():
+    """
+    v1.1.0 gap 2 regression check: the broadened IMMUNE_MARKER_HINTS
+    explicitly includes HLA-DRA and CD74 and MZB1, which were absent from
+    the v0.8 list and missed BML_1's macrophage and plasma clusters.
+    """
+    from scellrun.self_check import IMMUNE_MARKER_HINTS
+
+    for marker in ("HLA-DRA", "HLA-DRB1", "HLA-DPB1", "CD74", "MZB1",
+                   "JCHAIN", "CPA3", "TPSAB1", "CD37", "CD1C", "FCER1A"):
+        assert marker in IMMUNE_MARKER_HINTS, (
+            f"v1.1.0 IMMUNE_MARKER_HINTS missing expected marker {marker}"
+        )
+
+
 def test_annotate_self_check_silent_on_clean_call():
     """Margins above 0.05 + panel hits → no findings."""
     annotations = [

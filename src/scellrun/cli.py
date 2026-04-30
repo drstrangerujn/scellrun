@@ -610,6 +610,7 @@ def scrna_annotate(
     import sys as _sys
     _argv = " ".join(_sys.argv)
     annot_profile_supplied = "--profile" in _argv or "-p" in _sys.argv
+    annot_panel_supplied = "--panel" in _argv
     annot_ai_supplied = "--ai" in _argv or "--no-ai" in _argv
     annot_pubmed_supplied = "--pubmed" in _argv or "--no-pubmed" in _argv
 
@@ -627,6 +628,11 @@ def scrna_annotate(
             run_dir=run_dir,
             profile_user_supplied=annot_profile_supplied,
             resolution_user_supplied=True,  # CLI always exposes --resolution
+            # v1.1.0: tag panel as user-supplied only when --panel actually
+            # appeared on argv. The string value alone isn't proof of intent;
+            # cf. the orchestrator path in scellrun.analyze which passes a
+            # value with panel_name_user_supplied=False (cold-validation gap 3).
+            panel_name_user_supplied=annot_panel_supplied,
             use_ai_user_supplied=annot_ai_supplied,
             use_pubmed_user_supplied=annot_pubmed_supplied,
             tissue_user_supplied=tissue is not None,

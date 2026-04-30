@@ -313,6 +313,7 @@ def run_annotate(
     run_dir: Path | None = None,
     profile_user_supplied: bool = False,
     resolution_user_supplied: bool = True,
+    panel_name_user_supplied: bool | None = None,
     use_ai_user_supplied: bool = False,
     use_pubmed_user_supplied: bool = False,
     tissue_user_supplied: bool = False,
@@ -323,7 +324,19 @@ def run_annotate(
 
     `profile_module` is the loaded scellrun.profiles.* submodule. Must define
     at least one marker panel (chondrocyte_markers or celltype_broad).
+
+    v1.1.0: `panel_name_user_supplied` disambiguates "the orchestrator
+    auto-picked a panel and is now passing it as a string" from "the user
+    typed --panel on the CLI". When None (default), falls back to the
+    legacy heuristic `panel_name is not None` for backward compatibility
+    with direct callers (tests). The orchestrator (`scellrun analyze`)
+    passes `panel_name_user_supplied=False` even when it has computed a
+    panel name, so the decision row is `source="auto"`. The CLI passes
+    `panel_name_user_supplied=True` only when the user actually typed
+    `--panel`. Cold-validation gap 3.
     """
+    if panel_name_user_supplied is None:
+        panel_name_user_supplied = panel_name is not None
     res_to_key = _resolution_keys(adata)
     if resolution not in res_to_key:
         raise ValueError(
@@ -412,15 +425,19 @@ def run_annotate(
                 key="panel",
                 value=panel_actual_name,
                 default=None,
-                is_user_override=panel_name is not None,
+                is_user_override=panel_name_user_supplied,
                 attempt_id=attempt_id,
                 rationale=(
-                    f"--panel {panel_name!r} forced"
-                    if panel_name is not None
+                    f"--panel {panel_name!r} forced by user"
+                    if panel_name_user_supplied
                     else (
-                        "auto-picked chondrocyte_markers (fine subtype) — preferred when available"
-                        if panel_actual_name == "chondrocyte_markers"
-                        else f"auto-picked {panel_actual_name!r} — first panel the profile defines"
+                        f"orchestrator-injected panel {panel_actual_name!r} (auto-pick or self-check fix)"
+                        if panel_name is not None
+                        else (
+                            "auto-picked chondrocyte_markers (fine subtype) — preferred when available"
+                            if panel_actual_name == "chondrocyte_markers"
+                            else f"auto-picked {panel_actual_name!r} — first panel the profile defines"
+                        )
                     )
                 ),
             ),

@@ -250,7 +250,7 @@ not default to `default` and let the broad panel run when a tissue-
 specific profile exists. If the user's tissue has no matching profile,
 use `default` and tell them — adding a profile is a one-PR contribution.
 
-### Panel auto-selection inside `joint-disease` (v0.9.1)
+### Panel auto-selection inside `joint-disease` (v1.1.0)
 
 The `joint-disease` profile ships two annotation panels: the Fan 2024
 `chondrocyte_markers` (11 chondrocyte subtypes) and a broad
@@ -260,12 +260,15 @@ behavior was to always prefer `chondrocyte_markers` on this profile,
 which mis-labels subchondral-bone or synovium datasets where most
 clusters are immune.
 
-v0.9.1 adds an auto-pick step (`_autopick_panel_for_data`): at the
-chosen resolution, scellrun looks at each cluster's top markers and
-counts which clusters hit only the `celltype_broad` gene set without
-hitting `chondrocyte_markers`. If more than 50% of clusters fall in
-the celltype_broad-only bucket, scellrun swaps the panel to
-`celltype_broad` rather than mis-labeling the dataset.
+v1.1.0 hardens the auto-pick step (`_autopick_panel_for_data`): at the
+chosen resolution, scellrun counts the number of clusters where the
+chondrocyte panel scores any hit and the number where the broad panel
+scores any hit. The chondrocyte panel is kept ONLY when chondrocyte
+hits >= 1.5x broad hits. Tie or smaller margin swaps to
+`celltype_broad`. (The pre-1.1.0 rule fired only when >50% of clusters
+hit broad-WITHOUT-chondrocyte; on BML_1 every immune cluster picked up
+at least one weak chondrocyte hit, so the swap-trigger was 0/13 and the
+chondrocyte panel won the tie. The 1.5x margin closes that loophole.)
 
 What this means for you (the agent):
 
@@ -273,15 +276,63 @@ What this means for you (the agent):
   out to be immune-rich (subchondral bone, synovium, fluid). scellrun
   will swap panels rather than blindly run the chondrocyte panel.
 - The decision log row `analyze.annotate.auto_panel` records which
-  panel was picked AND the rationale. For a swap you'll see something
-  like: `value=celltype_broad`, `rationale="9/13 clusters (69%) have
-  celltype_broad hits without chondrocyte_markers hits — auto-picked
-  celltype_broad"`. For the chondrocyte default you'll see:
-  `value=chondrocyte_markers`, `rationale="fine-subtype panel preferred
-  (chondrocyte hits dominate or are tied)"`.
+  panel was picked AND the rationale, with the cluster-level hit counts.
+  For a swap you'll see something like: `value=celltype_broad`,
+  `rationale="swapped to celltype_broad: chondrocyte_hits=2,
+  broad_hits=9; required >=1.5x margin to keep chondrocyte panel."`
+  For the chondrocyte default: `value=chondrocyte_markers`,
+  `rationale="kept chondrocyte_markers: chondrocyte_hits=10,
+  broad_hits=3; cleared the >=1.5x margin..."`.
 - If you (the agent) want to override the auto-pick, pass `--panel
   chondrocyte_markers` or `--panel celltype_broad` to the per-stage
   `scrna annotate` command. This shows up as a `source="user"` row.
+
+### `source="user"` vs `source="auto"` on `annotate.panel` (v1.1.0)
+
+Pre-1.1.0 had a footgun: when `analyze` orchestrated the pipeline and
+the auto-pick (or a self-check fix) selected a panel name, the value
+was passed through to `run_annotate` as a string, and the recorded
+decision row was tagged `source="user"`. That broke hard rule 5 ("when
+value differs from default, tell the user this was an override") —
+the user did not in fact override anything, the orchestrator did.
+
+v1.1.0 separates intent from value: `run_annotate` now takes a
+`panel_name_user_supplied` flag distinct from `panel_name`. The
+orchestrator (`scellrun analyze`) always passes
+`panel_name_user_supplied=False` for its auto-picked or self-check
+fixed-up panel; the per-stage CLI (`scellrun scrna annotate`) passes
+`True` only when `--panel` actually appeared on argv. The decision log
+row's `source` reflects the intent, not the string value.
+
+If you see `annotate.panel` `source="user"` in v1.1.0+, that genuinely
+means the user (or you, the agent) typed `--panel`. Quote the rationale
+back honestly. If you see `source="auto"`, this was scellrun's own pick
+(auto-pick at the orchestrator level, or a self-check `--auto-fix`
+retry); say "scellrun auto-picked..." not "you overrode...".
+
+## Glossary: chondrocyte panel labels
+
+The `joint-disease` profile's `chondrocyte_markers` panel is the Fan 2024
+human articular cartilage 11-subtype taxonomy. When the agent quotes one
+of these labels, here's what it means in plain language for the user:
+
+| label   | full name                  | what it is in plain words |
+| ------- | -------------------------- | ------------------------- |
+| ProC    | proliferating chondrocyte  | actively dividing chondrocyte |
+| EC      | effector chondrocyte       | mature chondrocyte producing collagen II |
+| RegC    | regulatory chondrocyte     | matrix-modulating chondrocyte |
+| RepC    | reparative chondrocyte     | wound-repair-active chondrocyte |
+| HomC    | homeostatic chondrocyte    | stress-response / housekeeping chondrocyte |
+| preHTC  | pre-hypertrophic           | transitional toward hypertrophy |
+| HTC     | hypertrophic               | terminal hypertrophic chondrocyte |
+| preFC   | pre-fibrochondrocyte       | transitional toward fibro-cartilage |
+| FC      | fibrochondrocyte           | fibro-cartilage producing |
+| preInfC | pre-inflammatory           | transitional toward inflammatory phenotype |
+| InfC    | inflammatory chondrocyte   | inflammation-driven chondrocyte |
+
+If the user is not a chondrocyte specialist, surface the plain-English column,
+not the abbreviation. The reference is Fan et al. 2024 — quote the PMID
+(38191537) when the user asks where the panel comes from.
 
 ## Finding the data
 

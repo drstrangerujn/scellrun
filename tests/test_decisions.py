@@ -249,6 +249,42 @@ def test_analyze_pipeline_writes_non_empty_decisions(planted_h5ad, tmp_path, mon
     assert float(chosen[0]["value"]) in (0.3, 0.5)
 
 
+def test_orchestrator_panel_recorded_as_auto_not_user(planted_h5ad, tmp_path, monkeypatch):
+    """
+    v1.1.0 gap 3: when the orchestrator (`scellrun analyze`) auto-picks a
+    panel and passes it through to `run_annotate`, the recorded
+    `annotate.panel` decision row reads `source="auto"`, not
+    `source="user"`. Pre-1.1.0 the `panel_name is not None` heuristic
+    inside annotate.py false-tagged this row as a user override.
+    """
+    from scellrun.analyze import run_analyze
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    run_dir = tmp_path / "run"
+    run_analyze(
+        planted_h5ad,
+        profile="joint-disease",
+        run_dir=run_dir,
+        resolutions=(0.5,),
+        method="none",
+        use_ai=False,
+    )
+
+    rows = read_decisions(run_dir)
+    panel_rows = [
+        r for r in rows
+        if r["stage"] == "annotate" and r["key"] == "panel"
+    ]
+    assert len(panel_rows) == 1, (
+        f"expected exactly one annotate.panel row; got {len(panel_rows)}: {panel_rows}"
+    )
+    assert panel_rows[0]["source"] == "auto", (
+        f"orchestrator-passed panel must be source='auto'; "
+        f"got source={panel_rows[0]['source']!r}, value={panel_rows[0]['value']!r}, "
+        f"rationale={panel_rows[0]['rationale']!r}"
+    )
+
+
 def test_truncate_stage_drops_only_matching_rows(tmp_path):
     """truncate_stage(run_dir, 'qc') removes every qc.* row, keeps others."""
     record_many(

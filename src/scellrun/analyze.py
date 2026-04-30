@@ -173,6 +173,20 @@ def _pick_best_resolution(
     return float(best_res), "fewest singletons → most balanced (every resolution fragmented)"
 
 
+PANEL_AUTOPICK_CHONDRO_MARGIN = 1.5
+"""
+v1.1.0: chondrocyte panel must beat broad panel by 1.5x in cluster-level hits
+to be kept. A tie or anything weaker swaps to celltype_broad. The pre-1.1.0
+"only count broad-only clusters and fire on >50%" heuristic missed the BML_1
+case where the chondrocyte panel got 1-2 weak cluster hits and the broad panel
+got 7+ cluster hits — that's a tie under the old rule (no broad-only clusters
+because each had at least one weak chondrocyte gene), so the chondrocyte panel
+won by default. The 1.5x margin requirement matches the cold-validation
+journal's "fine-subtype panel only when chondrocyte hits dominate" wording
+that the rationale string promised but the code didn't enforce.
+"""
+
+
 def _autopick_panel_for_data(
     profile_module: Any,
     integrated_adata: Any,
@@ -182,11 +196,14 @@ def _autopick_panel_for_data(
     Decide which panel to use when both `chondrocyte_markers` and
     `celltype_broad` are defined on the profile.
 
-    Heuristic (issue #003 part 2): if a majority of clusters at the
-    chosen resolution have hits in the celltype_broad panel WITHOUT
-    chondrocyte_markers hits, the data is plainly non-chondrocyte (e.g.
-    subchondral bone, synovium, fluid). Auto-pick celltype_broad in that
-    case rather than blindly preferring the chondrocyte subtype panel.
+    v1.1.0 tie-break: count clusters where the chondrocyte panel hits
+    (any chondrocyte_markers gene in cluster top markers) and clusters
+    where the broad panel hits. Keep chondrocyte_markers ONLY when
+    chondrocyte hits >= 1.5x broad hits. Tie or smaller margin → swap
+    to celltype_broad. Pre-1.1.0 logic only counted "broad-only" clusters
+    and fired on >50%, which silently kept the chondrocyte panel on
+    immune-rich subchondral-bone data where every immune cluster picked
+    up at least one weak chondrocyte hit (cold-validation gap 1).
 
     Returns (panel_name, rationale_str).
     """
@@ -232,24 +249,31 @@ def _autopick_panel_for_data(
     if n_clusters == 0:
         return ("chondrocyte_markers", "default (no clusters)")
 
-    n_broad_only = 0
+    chondro_hits = 0
+    broad_hits = 0
     for c in cluster_names:
         top = [str(g).upper() for g in names[c][:30]]
-        broad_hit = any(g in broad_genes for g in top)
-        chondro_hit = any(g in chondro_genes for g in top)
-        if broad_hit and not chondro_hit:
-            n_broad_only += 1
+        if any(g in chondro_genes for g in top):
+            chondro_hits += 1
+        if any(g in broad_genes for g in top):
+            broad_hits += 1
 
-    frac_broad = n_broad_only / n_clusters
-    if frac_broad > 0.5:
+    # v1.1.0: chondrocyte panel must clear a 1.5x margin over broad panel
+    # to be kept. Tie or smaller margin → broad panel wins. Required margin
+    # is documented at PANEL_AUTOPICK_CHONDRO_MARGIN above.
+    keeps_chondro = chondro_hits >= PANEL_AUTOPICK_CHONDRO_MARGIN * broad_hits
+    if not keeps_chondro:
         return (
             "celltype_broad",
-            f"{n_broad_only}/{n_clusters} clusters ({frac_broad:.0%}) have celltype_broad hits "
-            "without chondrocyte_markers hits — auto-picked celltype_broad",
+            f"swapped to celltype_broad: chondrocyte_hits={chondro_hits}, "
+            f"broad_hits={broad_hits}; required >={PANEL_AUTOPICK_CHONDRO_MARGIN:g}x margin "
+            "to keep chondrocyte panel.",
         )
     return (
         "chondrocyte_markers",
-        "fine-subtype panel preferred (chondrocyte hits dominate or are tied)",
+        f"kept chondrocyte_markers: chondrocyte_hits={chondro_hits}, "
+        f"broad_hits={broad_hits}; cleared the >={PANEL_AUTOPICK_CHONDRO_MARGIN:g}x margin "
+        "required to keep chondrocyte panel.",
     )
 
 
@@ -976,6 +1000,11 @@ def run_analyze(
             run_dir=run_dir,
             profile_user_supplied=profile != "default",
             resolution_user_supplied=False,  # orchestrator picked it
+            # v1.1.0: orchestrator-injected panel name is auto, not user.
+            # Even when annot_panel_name is a non-None string, it came
+            # from the auto-pick step or a self-check fix payload, NOT
+            # from the user passing --panel on the CLI. Cold-validation gap 3.
+            panel_name_user_supplied=False,
             use_ai_user_supplied=False,
             use_pubmed_user_supplied=use_pubmed,
             tissue_user_supplied=tissue is not None,
@@ -1072,6 +1101,10 @@ def run_analyze(
                     run_dir=run_dir,
                     profile_user_supplied=profile != "default",
                     resolution_user_supplied=False,
+                    # v1.1.0: see note on first run_annotate call above —
+                    # this retry's panel comes from a self-check fix payload,
+                    # still orchestrator-driven, not user-driven.
+                    panel_name_user_supplied=False,
                     use_ai_user_supplied=False,
                     use_pubmed_user_supplied=use_pubmed,
                     tissue_user_supplied=tissue is not None,

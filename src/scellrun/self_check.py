@@ -341,23 +341,45 @@ def integrate_self_check(
 # ---------------------------------------------------------------------------
 
 ANNOTATE_AMBIGUOUS_MARGIN = 0.05  # if every cluster's margin is below this, fire
-ANNOTATE_IMMUNE_HEURISTIC_FRACTION = 0.5  # >this fraction of clusters looking immune fires the panel-swap
+ANNOTATE_IMMUNE_HEURISTIC_FRACTION = 0.4  # v1.1.0: >=this fraction of clusters looking immune fires the panel-swap (was 0.5)
+ANNOTATE_IMMUNE_HITS_PER_CLUSTER = 1  # v1.1.0: >=this many immune-marker hits in a cluster's top markers = "looks immune" (was 2)
 
 
 # Rough immune-marker shortlist for the chondrocyte_markers misuse heuristic.
 # Hits any of these in a cluster's top markers is a soft "this looks immune"
-# vote; if a majority of clusters look immune AND we're matching against the
+# vote; if >=40% of clusters look immune AND we're matching against the
 # chondrocyte panel, switch to celltype_broad (which has macrophage / T-cell
 # / B-cell groups that will actually score).
+#
+# v1.1.0 broadens the shortlist (cold-validation gap 2 + ISSUES.md #012):
+# the v0.8 list was a textbook PBMC marker set and missed the markers that
+# actually show up in subchondral bone / synovium scRNA — HLA class II,
+# plasma-cell IGs, mast-cell tryptases, B-cell CD37, dendritic CD1C.
+# Concretely, on the BML_1 cold-validation sample the old list found
+# immune signal in only 1/13 clusters (NK only); the broadened list catches
+# macrophage (HLA-DRA/CD74), plasma (MZB1/JCHAIN/IGHG1), mast (CPA3/TPSAB1),
+# B (CD37), and dendritic (CD1C/FCER1A) clusters too. Combined with the
+# >=1 hit and >=40% thresholds (lowered from >=2 / >50%), the trigger
+# fires comfortably on a 9/13 = 69% immune dataset.
 IMMUNE_MARKER_HINTS: tuple[str, ...] = (
     # T cell
     "CD3D", "CD3E", "CD3G", "CD8A", "CD4", "TRAC", "TRBC1", "TRBC2",
     # B cell
-    "CD19", "MS4A1", "CD79A", "CD79B",
-    # Myeloid
-    "CD68", "CD163", "LYZ", "CD14", "FCN1", "S100A8", "S100A9", "C1QA", "C1QB", "C1QC",
+    "CD19", "MS4A1", "CD79A", "CD79B", "CD37",
+    # Plasma cell
+    "MZB1", "JCHAIN", "XBP1", "IGHG1", "IGHA1", "IGHM", "IGKC", "IGLC2", "DERL3",
+    # Myeloid (macrophage / monocyte)
+    "CD68", "CD163", "LYZ", "CD14", "FCN1", "S100A8", "S100A9",
+    "C1QA", "C1QB", "C1QC", "AIF1", "TYROBP", "FCER1G",
+    # MHC class II (myeloid + DC + B; absent on chondrocytes / fibroblasts)
+    "HLA-DRA", "HLA-DRB1", "HLA-DRB5", "HLA-DPA1", "HLA-DPB1",
+    "HLA-DQA1", "HLA-DQB1", "CD74",
+    # Dendritic cell (incl. plasmacytoid)
+    "CD1C", "FCER1A", "CLEC9A", "IRF7", "IRF8", "IL3RA", "PLD4",
+    # Mast cell
+    "CPA3", "TPSAB1", "TPSB2", "MS4A2", "CTSG", "KIT", "HPGDS",
     # NK
-    "NKG7", "GNLY", "KLRD1",
+    "NKG7", "GNLY", "KLRD1", "GZMA", "GZMB", "KLRB1",
     # Pan-leukocyte
     "PTPRC",
 )
@@ -427,11 +449,19 @@ def annotate_self_check(
         for a in annotations:
             top_markers = [str(g).upper() for g in getattr(a, "top_markers", [])[:30]]
             hits = sum(1 for g in IMMUNE_MARKER_HINTS if g in top_markers)
-            # Two or more immune hints in the top markers = "looks immune".
-            if hits >= 2:
+            # v1.1.0: ANNOTATE_IMMUNE_HITS_PER_CLUSTER (>=1 hit) marks a
+            # cluster as "looks immune". Was >=2 in v0.8 — too strict on
+            # subchondral bone / synovium where each cluster's top 30
+            # often only has 1-3 of the curated markers visible above
+            # housekeeping noise. See ISSUES.md #012.
+            if hits >= ANNOTATE_IMMUNE_HITS_PER_CLUSTER:
                 n_immune_clusters += 1
         immune_fraction = n_immune_clusters / len(annotations)
-        if immune_fraction > ANNOTATE_IMMUNE_HEURISTIC_FRACTION:
+        # v1.1.0: >=40% (was >50%). On BML_1 cold-validation 9/13 = 69%
+        # comfortably clears either bar; the lower threshold catches the
+        # boundary case (synovium with mixed chondrocyte + immune lineages)
+        # where the old >50% bar silently passed.
+        if immune_fraction >= ANNOTATE_IMMUNE_HEURISTIC_FRACTION:
             # Don't double-suggest if we already fired the ambiguous-panel finding
             # against the same alt panel.
             already_suggested_broad = any(
