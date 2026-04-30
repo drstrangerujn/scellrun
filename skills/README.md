@@ -1,5 +1,10 @@
 # scellrun skills
 
+> SKILL.md v2 (2026-04-30): rewritten for scellrun v0.8+ — covers the
+> `analyze` one-shot command, the `00_decisions.jsonl` log, self-check
+> findings, profile selection by tissue, and an end-to-end agent
+> dialogue example. Re-symlink if you installed an earlier copy.
+
 `skills/scellrun/SKILL.md` is a single canonical instruction document that
 teaches an LLM agent how to invoke scellrun. It uses Claude Code's frontmatter
 format, but the body is agent-agnostic.
