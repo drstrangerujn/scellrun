@@ -18,11 +18,7 @@ import numpy as np
 import pytest
 
 from scellrun.decisions import read_decisions
-from scellrun.self_check import (
-    annotate_self_check,
-    integrate_self_check,
-    qc_self_check,
-)
+from scellrun.self_check import annotate_self_check, integrate_self_check, qc_self_check
 
 
 # ---------------------------------------------------------------------------
