@@ -87,7 +87,11 @@ def test_analyze_end_to_end_creates_all_stage_dirs(planted_h5ad, tmp_path, monke
 
     result = run_analyze(
         planted_h5ad,
-        profile="default",
+        # joint-disease ships chondrocyte_markers + celltype_broad panels;
+        # the default profile has no panels, so annotate would have nothing
+        # to match against. The test exercises the orchestrator, not the
+        # default profile.
+        profile="joint-disease",
         species="human",
         tissue="synthetic",
         resolutions=(0.3, 0.5),
@@ -142,6 +146,7 @@ def test_analyze_force_allows_rerun(planted_h5ad, tmp_path, monkeypatch):
     run_dir = tmp_path / "run"
     run_analyze(
         planted_h5ad,
+        profile="joint-disease",
         run_dir=run_dir,
         resolutions=(0.5,),
         method="none",
@@ -153,6 +158,7 @@ def test_analyze_force_allows_rerun(planted_h5ad, tmp_path, monkeypatch):
     with pytest.raises(StageFailure):
         run_analyze(
             planted_h5ad,
+            profile="joint-disease",
             run_dir=run_dir,
             resolutions=(0.5,),
             method="none",
@@ -162,6 +168,7 @@ def test_analyze_force_allows_rerun(planted_h5ad, tmp_path, monkeypatch):
     # with force it works
     run_analyze(
         planted_h5ad,
+        profile="joint-disease",
         run_dir=run_dir,
         resolutions=(0.5,),
         method="none",

@@ -160,6 +160,22 @@ def run_analyze(
 
     profile_module = load_profile(profile)
 
+    # Early profile sanity check: the annotate stage needs a marker panel.
+    # Bail before doing any expensive work if the chosen profile can't
+    # satisfy the full chain. Default profile (no tissue) currently has
+    # no panel; users wanting the one-shot pipeline should pick a
+    # tissue-specific profile (e.g. joint-disease) or supply their own.
+    if not (
+        hasattr(profile_module, "chondrocyte_markers")
+        or hasattr(profile_module, "celltype_broad")
+    ):
+        raise ValueError(
+            f"profile {profile!r} has no marker panels — "
+            "scellrun analyze needs a panel at the annotate stage. "
+            "Pick a tissue-specific profile (e.g. --profile joint-disease) "
+            "or run the per-stage commands and skip annotate."
+        )
+
     stages_completed: list[str] = []
 
     # ---- Stage 1: QC -------------------------------------------------------
