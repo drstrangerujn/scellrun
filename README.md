@@ -7,10 +7,25 @@
 > One command, a publication-quality report. You don't need to learn scanpy first.
 
 ```bash
+# 1. one-time: a clean Python environment so scellrun's deps don't collide with anything else on your machine
+conda create -n scellrun python=3.11 -y
+conda activate scellrun
+
+# 2. install
 pip install scellrun
-scellrun scrna qc data.h5ad
-# → opens a browser-readable QC report in seconds
+
+# 3. run
+scellrun scrna qc data.h5ad     # → HTML report you can open in a browser
 ```
+
+Don't have a `.h5ad`? Cellranger output works directly:
+
+```bash
+scellrun scrna convert path/to/cellranger_outs -o data.h5ad
+scellrun scrna qc data.h5ad
+```
+
+Want a Chinese report? Add `--lang zh`.
 
 **Status:** v0.1.0, early alpha. APIs will change without warning. Don't pin against a tag yet.
 
@@ -60,14 +75,36 @@ That's it. See [`ROADMAP.md`](ROADMAP.md) for v0.2-v0.5 (integrate, markers,
 annotate, multi-stage report) and the planned `scellrun run --steps ...`
 pipeline mode.
 
-## Install (dev)
+## Install
+
+### For users — clean conda env (recommended)
+
+```bash
+conda create -n scellrun python=3.11 -y
+conda activate scellrun
+pip install scellrun
+```
+
+If you don't have conda, [miniconda](https://docs.anaconda.com/miniconda/)
+takes about 2 minutes to install. Or use [`uv`](https://docs.astral.sh/uv/)
+for a faster venv:
+
+```bash
+uv venv .scellrun-env && source .scellrun-env/bin/activate
+uv pip install scellrun
+```
+
+Either way, scellrun ends up in its own environment — your other Python
+projects (an old scanpy, Seurat-via-rpy2, etc.) won't be touched.
+
+### For contributors — editable from source
 
 ```bash
 git clone https://github.com/drstrangerujn/scellrun.git
 cd scellrun
+conda create -n scellrun-dev python=3.11 -y && conda activate scellrun-dev
 pip install -e ".[dev]"
-scellrun --help
-scellrun scrna qc /path/to/data.h5ad
+pytest -q          # 25 tests should pass
 ```
 
 ## Profiles

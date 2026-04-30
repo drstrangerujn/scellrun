@@ -262,6 +262,7 @@ def write_artifacts(
     out_dir: Path,
     *,
     write_h5ad: bool = True,
+    lang: str = "en",
 ) -> dict[str, Path]:
     """
     Write report.html, per_cell_metrics.csv, and (by default) qc.h5ad.
@@ -297,7 +298,8 @@ def write_artifacts(
         loader=PackageLoader("scellrun", "templates"),
         autoescape=select_autoescape(["html"]),
     )
-    template = env.get_template("scrna_qc.html.j2")
+    template_name = "scrna_qc_zh.html.j2" if lang == "zh" else "scrna_qc.html.j2"
+    template = env.get_template(template_name)
     html = template.render(
         result=result,
         thresholds=result.thresholds,

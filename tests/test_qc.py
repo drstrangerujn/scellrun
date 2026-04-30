@@ -61,6 +61,17 @@ def test_write_artifacts_skip_h5ad(synthetic_h5ad, tmp_path):
     assert artifacts["report"].exists()
 
 
+def test_write_artifacts_zh_lang(synthetic_h5ad, tmp_path):
+    """Chinese report renders when lang='zh'."""
+    a = ad.read_h5ad(synthetic_h5ad)
+    result = run_qc(a, flag_doublets=False)
+    out = tmp_path / "out_zh"
+    artifacts = write_artifacts(result, a, out, lang="zh")
+    html = artifacts["report"].read_text(encoding="utf-8")
+    assert "单细胞 QC 报告" in html
+    assert "总览" in html
+
+
 def test_qc_h5ad_roundtrip(synthetic_h5ad, tmp_path):
     """qc.h5ad written by scellrun must reload with the qc_pass column intact —
     this is the contract for v0.2 integrate."""

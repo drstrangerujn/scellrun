@@ -85,6 +85,7 @@ def scrna_qc(
     flag_doublets: bool = typer.Option(True, "--flag-doublets/--no-flag-doublets", help="Run scrublet for doublet flagging."),
     write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Also write annotated qc.h5ad (canonical handoff to v0.2 integrate)."),
     force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing artifacts in the stage dir. Default: error if 01_qc/ already has output."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
 ) -> None:
     """
     Compute single-cell QC metrics, FLAG (don't drop) outlier cells, and emit:
@@ -112,6 +113,9 @@ def scrna_qc(
         raise typer.Exit(2) from None
     if species not in ("human", "mouse"):
         console.print(f"[red]error:[/red] --species must be 'human' or 'mouse', got {species!r}")
+        raise typer.Exit(2) from None
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
         raise typer.Exit(2) from None
 
     try:
@@ -182,7 +186,7 @@ def scrna_qc(
     if flag_doublets and result.raw_counts_check != "looks_like_normalized":
         console.print(f"doublets flagged: {result.n_doublets_flagged:,}")
 
-    artifacts = write_artifacts(result, adata, out_dir, write_h5ad=write_h5ad)
+    artifacts = write_artifacts(result, adata, out_dir, write_h5ad=write_h5ad, lang=lang)
     write_run_meta(
         run_dir,
         command="scrna qc",
@@ -197,6 +201,7 @@ def scrna_qc(
             "write_h5ad": write_h5ad,
             "force": force,
             "raw_counts_check": result.raw_counts_check,
+            "lang": lang,
         },
     )
     console.print(f"[bold]report:[/bold] [link=file://{artifacts['report'].resolve()}]{artifacts['report']}[/link]")
