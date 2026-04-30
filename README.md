@@ -14,15 +14,16 @@ conda activate scellrun
 # 2. install
 pip install scellrun
 
-# 3. run
-scellrun scrna qc data.h5ad     # → HTML report you can open in a browser
+# 3. run the full pipeline in one shot — qc → integrate → markers → annotate → report
+scellrun analyze data.h5ad --tissue "OA cartilage"
+# → opens with a single index.html link you can drop into a browser
 ```
 
 Don't have a `.h5ad`? Cellranger output works directly:
 
 ```bash
 scellrun scrna convert path/to/cellranger_outs -o data.h5ad
-scellrun scrna qc data.h5ad
+scellrun analyze data.h5ad --tissue "OA cartilage"
 ```
 
 Want a Chinese report? Add `--lang zh`.

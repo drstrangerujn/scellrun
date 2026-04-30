@@ -599,6 +599,108 @@ def scrna_annotate(
         console.print(f"annotated h5ad: {artifacts['annotated_h5ad']}")
 
 
+@app.command("analyze")
+def analyze_cmd(
+    h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input .h5ad file."),
+    profile: str = typer.Option("default", "--profile", "-p", help="Profile name (see `scellrun profiles list`)."),
+    species: str = typer.Option("human", "--species", help="'human' or 'mouse'."),
+    tissue: str | None = typer.Option(None, "--tissue", help="Tissue context (e.g. 'OA cartilage'). Drives the AI recommender prompt and PubMed scoping."),
+    resolutions: str = typer.Option(
+        "default",
+        "--resolutions",
+        help="Comma-separated Leiden resolutions, 'default' (0.1,0.3,0.5,0.8,1.0), or 'aio' for the 13-step sweep.",
+    ),
+    use_ai: bool | None = typer.Option(None, "--ai/--no-ai", help="Use Anthropic LLM for resolution recommendation + annotation second opinion. Default: True if ANTHROPIC_API_KEY is set, else False."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run root directory. Default: scellrun_out/run-YYYYMMDD-HHMMSS."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing stage subdirs."),
+    max_genes: int | None = typer.Option(None, "--max-genes", help="Override profile max_genes upper cap (QC stage)."),
+    method: str = typer.Option("harmony", "--method", help="Integration method: harmony / none. (rpca/cca planned, currently raises NotImplementedError.)"),
+    regress_cell_cycle: bool = typer.Option(False, "--regress-cell-cycle/--no-regress-cell-cycle", help="Score and regress out S/G2M cell-cycle effect during integrate."),
+    use_pubmed: bool = typer.Option(False, "--pubmed/--no-pubmed", help="Annotate stage: fetch top PubMed papers per top marker."),
+) -> None:
+    """
+    One-shot pipeline: qc → integrate → markers → annotate → report.
+
+    A single command takes a raw .h5ad and produces a populated run-dir
+    with one final `index.html` link. New users do not have to learn the
+    stage layout.
+
+    Param surface: this command exposes the most common knobs as flat
+    options (`--profile`, `--max-genes`, `--method`, `--regress-cell-cycle`,
+    `--resolutions`, `--ai`, `--pubmed`, `--lang`, `--run-dir`, `--force`).
+    Stage-specific deep customization (e.g. setting `--qc.flag-doublets=false`
+    or `--integrate.n-pcs 50`) is intentionally NOT plumbed through here:
+    if you need that level of control you should be running the per-stage
+    commands directly. The same defaults that ship with the per-stage
+    commands apply here.
+    """
+    import os
+
+    from scellrun.analyze import StageFailure, run_analyze
+    from scellrun.scrna.integrate import AIO_FULL_RESOLUTIONS, DEFAULT_RESOLUTIONS
+
+    if species not in ("human", "mouse"):
+        console.print(f"[red]error:[/red] --species must be 'human' or 'mouse', got {species!r}")
+        raise typer.Exit(2) from None
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+    if method not in ("harmony", "rpca", "cca", "none"):
+        console.print(f"[red]error:[/red] --method must be one of harmony/rpca/cca/none, got {method!r}")
+        raise typer.Exit(2) from None
+
+    if resolutions == "aio":
+        res_value: tuple[float, ...] | str = AIO_FULL_RESOLUTIONS
+    elif resolutions == "default":
+        res_value = DEFAULT_RESOLUTIONS
+    else:
+        try:
+            res_value = tuple(float(x) for x in resolutions.split(",") if x.strip())
+        except ValueError:
+            console.print(f"[red]error:[/red] could not parse --resolutions {resolutions!r}")
+            raise typer.Exit(2) from None
+        if not res_value:
+            console.print("[red]error:[/red] --resolutions must list at least one value")
+            raise typer.Exit(2) from None
+
+    # Default --ai: True iff an API key is set in the environment.
+    if use_ai is None:
+        use_ai = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    console.print(
+        f"[bold]scellrun analyze[/bold]  •  profile=[cyan]{profile}[/cyan]  "
+        f"species=[cyan]{species}[/cyan]  tissue=[cyan]{tissue or '(none)'}[/cyan]  "
+        f"ai=[cyan]{use_ai}[/cyan]"
+    )
+
+    try:
+        result = run_analyze(
+            h5ad,
+            profile=profile,
+            species=species,
+            tissue=tissue,
+            resolutions=res_value,
+            use_ai=use_ai,
+            lang=lang,
+            run_dir=run_dir,
+            force=force,
+            max_genes=max_genes,
+            method=method,
+            regress_cell_cycle=regress_cell_cycle,
+            use_pubmed=use_pubmed,
+            on_progress=lambda s: console.print(s),
+        )
+    except StageFailure as e:
+        console.print(f"[red]error:[/red] pipeline aborted at stage {e.stage!r}: {e.original}")
+        raise typer.Exit(1) from None
+
+    if result.report_index is not None:
+        console.print(
+            f"[bold]index:[/bold] [link=file://{result.report_index.resolve()}]{result.report_index}[/link]"
+        )
+
+
 @app.command("report")
 def report_cmd(
     run_dir: Path = typer.Argument(..., exists=True, file_okay=False, readable=True, help="Run directory (e.g. scellrun_out/run-...)."),
