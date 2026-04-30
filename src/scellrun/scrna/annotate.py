@@ -356,12 +356,12 @@ def run_annotate(
     # Write back to adata.obs as a new category column
     cluster_col = res_to_key[resolution]
     label_map_panel = {a.cluster: a.panel_label for a in annotations}
-    adata.obs[f"scellrun_celltype_panel"] = (
+    adata.obs["scellrun_celltype_panel"] = (
         adata.obs[cluster_col].map(label_map_panel).astype("category")
     )
     if use_ai:
         label_map_ai = {a.cluster: (a.ai_label or a.panel_label) for a in annotations}
-        adata.obs[f"scellrun_celltype_ai"] = (
+        adata.obs["scellrun_celltype_ai"] = (
             adata.obs[cluster_col].map(label_map_ai).astype("category")
         )
 
