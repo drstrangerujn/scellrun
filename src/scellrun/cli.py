@@ -7,9 +7,7 @@ Top-level command groups:
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -37,7 +35,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None, "--version", "-V", help="Show version and exit.", callback=_version_callback, is_eager=True
     ),
 ) -> None:
@@ -47,12 +45,12 @@ def main(
 @scrna_app.command("qc")
 def scrna_qc(
     h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input .h5ad file."),
-    run_dir: Optional[Path] = typer.Option(None, "--run-dir", help="Run root directory. Default: scellrun_out/run-YYYYMMDD-HHMMSS."),
-    out: Optional[Path] = typer.Option(None, "--out", "-o", help="Override output dir for this stage. By default, writes to <run-dir>/01_qc/."),
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run root directory. Default: scellrun_out/run-YYYYMMDD-HHMMSS."),
+    out: Path | None = typer.Option(None, "--out", "-o", help="Override output dir for this stage. By default, writes to <run-dir>/01_qc/."),
     assay: str = typer.Option("scrna", "--assay", help="Assay flavor: 'scrna' or 'snrna'.", show_default=True),
     species: str = typer.Option("human", "--species", help="'human' or 'mouse'. Currently informational; v0.2+ uses it for cell-cycle gene lists."),
     profile: str = typer.Option("default", "--profile", "-p", help="Profile name (see `scellrun profiles list`)."),
-    max_genes: Optional[int] = typer.Option(None, "--max-genes", help="Override profile max_genes upper cap."),
+    max_genes: int | None = typer.Option(None, "--max-genes", help="Override profile max_genes upper cap."),
     flag_doublets: bool = typer.Option(True, "--flag-doublets/--no-flag-doublets", help="Run scrublet for doublet flagging."),
     write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Also write annotated qc.h5ad (canonical handoff to v0.2 integrate)."),
     force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing artifacts in the stage dir. Default: error if 01_qc/ already has output."),
@@ -80,16 +78,16 @@ def scrna_qc(
 
     if assay not in ("scrna", "snrna"):
         console.print(f"[red]error:[/red] --assay must be 'scrna' or 'snrna', got {assay!r}")
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     if species not in ("human", "mouse"):
         console.print(f"[red]error:[/red] --species must be 'human' or 'mouse', got {species!r}")
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
 
     try:
         prof = load_profile(profile)
     except ModuleNotFoundError:
         console.print(f"[red]error:[/red] unknown profile {profile!r}. Try `scellrun profiles list`.")
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
 
     base_thresholds = prof.snrna_qc if assay == "snrna" else prof.scrna_qc
     overrides: dict = {"species": species}
@@ -107,7 +105,7 @@ def scrna_qc(
             out_dir = stage_dir(run_dir, "qc", force=force)
         except StageOutputExists as e:
             console.print(f"[red]error:[/red] {e}")
-            raise typer.Exit(2)
+            raise typer.Exit(2) from None
 
     console.print(
         f"[bold]scellrun scrna qc[/bold]  •  profile=[cyan]{profile}[/cyan]  "
@@ -132,7 +130,7 @@ def scrna_qc(
         )
     except InvalidInputError as e:
         console.print(f"[red]error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if result.raw_counts_check == "looks_like_normalized":
         console.print(
@@ -196,7 +194,7 @@ def profiles_show(
         mod = load_profile(name)
     except ModuleNotFoundError:
         console.print(f"[red]error:[/red] unknown profile {name!r}.")
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
 
     console.print(f"[bold]profile:[/bold] {name}")
     for attr in ("scrna_qc", "snrna_qc"):

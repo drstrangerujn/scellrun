@@ -1,21 +1,43 @@
 # scellrun
 
-> An opinionated, report-first CLI for single-cell and multi-omics analysis. Sane defaults baked in, deliverables out the other end, no twelve-knob refactor needed for every project.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Status:** v0.1, early alpha. APIs will change without warning. Don't pin against a tag yet.
+> **scellrun lowers the bar to running a defensible single-cell analysis.**
+> One command, a publication-quality report. You don't need to learn scanpy first.
+
+```bash
+pip install scellrun
+scellrun scrna qc data.h5ad
+# → opens a browser-readable QC report in seconds
+```
+
+**Status:** v0.1.0, early alpha. APIs will change without warning. Don't pin against a tag yet.
+
+## Who this is for
+
+- A clinician or rotating student looking at scRNA-seq data for the first time
+- A postdoc on a deadline who doesn't want to write QC boilerplate
+- A bioinformatics core that needs every project to look the same in a report
+- An LLM coding agent that should reach for a real tool instead of re-deriving thresholds
+
+If you already have your own pipeline, you don't need scellrun. If you don't,
+or you're tired of re-litigating the same decisions every project, this is for you.
 
 ## Why this exists
 
-The existing tooling — `scanpy`, `pyDESeq2`, `decoupler`, `SCENIC`, `nf-core` — is excellent and intentionally unopinionated. Every new project re-litigates the same decisions:
+Tools like `scanpy`, `pyDESeq2`, `decoupler`, `SCENIC` and `nf-core` are excellent
+and intentionally unopinionated. Every new project re-litigates the same decisions:
 
 - Which mt% threshold? Doublet filter before or after batch correction?
-- score_genes is significant — should I trust it on a sparse target gene?
-- The composite score correlates with disease — do I report Spearman ρ on each of 18 clinical features, or one well-chosen dichotomy?
+- The composite score correlates with disease — Spearman ρ on each of 18 clinical features, or one well-chosen dichotomy?
 - What does the QC report actually need to look like for a reviewer to stop asking?
 
-`scellrun` answers these once, in code, by encoding the working practice of a clinician + bioinformatics team. The defaults are not "neutral" — they reflect a real position, made for real reasons, with the rationale rendered into every report.
+scellrun answers these once, in code, by encoding the working practice of a
+clinician + bioinformatics team. Defaults aren't "neutral" — they're a real
+position, made for real reasons, with the rationale rendered into every report.
 
-You can override anything. But if you don't override, you get a defensible analysis on day one.
+You can override anything. But if you don't override, you get a defensible
+analysis on day one.
 
 ## Where this fits
 
@@ -24,21 +46,18 @@ You can override anything. But if you don't override, you get a defensible analy
 | Anthropic scientific skills   | Prompt scaffolds that teach an LLM how to call `scanpy` etc.        |
 | Bioconda recipes              | Packaging                                                          |
 | `nf-core` pipelines           | General-purpose, infrastructure-heavy, vendor-neutral workflows     |
-| **`scellrun`**                 | A *narrow, opinionated, report-first* CLI for human research data   |
-
-LLM coding agents can call `scellrun` rather than re-deriving QC thresholds. Researchers get a reproducible HTML/PDF report rather than a folder of disconnected plots.
-
-## Profiles (planned)
-
-Different domains have different defaults. v0.1 ships one profile (`default`), good for fresh-tissue 10x v3 chemistry. The architecture is built so additional profiles can be contributed in a single PR — e.g. `--profile=tumor`, `--profile=joint-disease`, `--profile=brain-snrna`. Each profile is a small Python file with documented thresholds; no plugin system, no DSL, just a dataclass.
-
-If your community has working practice, contribute a profile.
+| **`scellrun`**                | An *opinionated, report-first* CLI optimized for low barrier to entry |
 
 ## v0.1 scope
 
-- `scellrun scrna qc <h5ad>` — single-cell QC (mt%, ribo%, n_genes, doublets) with annotated, defensible thresholds. Outputs an HTML report with rationale text and a per-cell CSV. Cells are *flagged*, never silently dropped.
+- `scellrun scrna qc <h5ad>` — single-cell QC (mt%, ribo%, hb%, n_genes, doublets)
+  with defensible thresholds. Outputs an HTML report with rationale text, a
+  per-cell CSV, and an annotated `qc.h5ad` ready for the v0.2 integration step.
+  Cells are *flagged* (`obs.scellrun_qc_pass`), never silently dropped.
 
-That's it. The roadmap is below.
+That's it. See [`ROADMAP.md`](ROADMAP.md) for v0.2-v0.5 (integrate, markers,
+annotate, multi-stage report) and the planned `scellrun run --steps ...`
+pipeline mode.
 
 ## Install (dev)
 
@@ -50,34 +69,38 @@ scellrun --help
 scellrun scrna qc /path/to/data.h5ad
 ```
 
-## Roadmap
+## Profiles
 
-- v0.2 — `scellrun scrna integrate` (Harmony with sane batch QC, integration-quality report).
-- v0.3 — `scellrun scrna annotate` (panel-based annotation with marker-verification step that catches the "neutrophil cluster lacking MPO" failure mode).
-- v0.4 — `scellrun stats composite` (composite-score scaffolding for clinical–molecular dichotomies, replacing N×FDR with one defensible test).
-- v0.5 — `scellrun report` (publication-quality PDF deliverable with the three-tier provenance trail: data / inference / literature).
-- v0.6+ — additional profiles, additional assays (bulk RNA-seq, metabolomics, proteomics integration).
+Different tissue domains have different defaults. v0.1 ships two profiles:
 
-## Contributing
+- `default` — fresh-tissue 10x v3 chemistry, joint-tissue-aware mt% ceiling
+- `joint-disease` — tighter hb% for avascular cartilage; ships the **Fan 2024 chondrocyte 11-subtype panel** + 15-group broad celltype panel for v0.4 annotation
 
-The fastest way to be useful: open an issue with a default you'd change and a one-line citation. The defaults document is the spine of the project.
+```bash
+scellrun profiles list
+scellrun profiles show joint-disease   # prints thresholds + panels
+```
+
+Adding a profile = one Python file under `src/scellrun/profiles/`. If your
+community has working practice, [contribute a profile](src/scellrun/profiles/).
 
 ## For LLM agents
 
 `skills/scellrun/SKILL.md` is a portable instruction document that teaches
-an agent (Claude Code, Hermes, Codex, etc.) when and how to invoke scellrun.
-Install it by symlinking into your agent's skills directory — see
-[`skills/README.md`](skills/README.md) for one-liner install commands per agent.
-
-If you'd rather extend scellrun than teach an agent to use it, contribute a
-**profile** under `src/scellrun/profiles/` instead.
+Claude Code, Hermes, Codex, or any markdown-aware agent harness when and how
+to invoke scellrun. Install it by symlinking into your agent's skills
+directory — see [`skills/README.md`](skills/README.md) for one-liner install
+commands per agent.
 
 ## License
 
-MIT.
+MIT — see [`LICENSE`](LICENSE).
 
 ## Acknowledgements
 
-The defaults baked into this tool are the residue of a lot of failed analyses and one or two saved nights. If they save you a similar evening, that's the goal.
+Defaults reflect the working practice of a clinician + bioinformatics team
+that has shipped these analyses for the OARSI / MSK community. The R "AIO"
+pipeline that prefigured scellrun's design is documented in
+[`ROADMAP.md`](ROADMAP.md).
 
 Built with assistance from Claude (Anthropic).

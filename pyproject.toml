@@ -54,6 +54,11 @@ target-version = "py310"
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# typer's idiomatic CLI signatures are full of typer.Option(...) defaults; B008 is
+# unavoidable without an awkward refactor. Skip it for CLI modules.
+"src/scellrun/cli.py" = ["B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
