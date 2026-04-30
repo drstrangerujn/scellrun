@@ -33,7 +33,7 @@
   <dt>线粒体比例 中位数</dt>   <dd>{{ "%.2f"|format(result.pct_mt_median) }}%</dd>
   <dt>线粒体比例 P95</dt>      <dd>{{ "%.2f"|format(result.pct_mt_p95) }}%</dd>
   <dt>血红蛋白比例 中位数</dt> <dd>{{ "%.2f"|format(result.pct_hb_median) }}%</dd>
-  <dt>双胞标记数</dt>          <dd>{{ "{:,}".format(result.n_doublets_flagged) }}</dd>
+  <dt>双胞标记数</dt>          <dd>{{ "{:,}".format(result.n_doublets_flagged) }}{% if result.doublet_threshold_collapsed %} <span style="color:#a55; font-size:.85rem;">(scrublet 自动阈值未收敛——请按 doublet_score 分布手动选阈值)</span>{% endif %}</dd>
   <dt>输入矩阵类型</dt>        <dd>{{ raw_counts_check }}</dd>
 </dl>
 

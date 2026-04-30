@@ -132,12 +132,23 @@ def _score_cluster_against_panel(
 
 
 def _best_panel_match(scores: dict[str, float]) -> tuple[str, float, float]:
-    """Return (best_label, best_score, margin_to_runner_up)."""
+    """Return (best_label, best_score, margin_to_runner_up).
+
+    When every panel group scores 0 (none of the panel's genes appear in the
+    cluster's top markers), return "Unassigned" rather than the first panel
+    label by dict-iteration order. The previous behavior silently labeled
+    every score-0 cluster with the first key in the panel, so for the
+    joint-disease chondrocyte_markers panel a non-chondrocyte cluster (e.g.
+    NK / T / mast) would come back as "ProC" with score 0.0 — see
+    ISSUES.md #003 from the v0.7 OA dogfood.
+    """
     if not scores:
         return ("Unassigned", 0.0, 0.0)
     sorted_labels = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     best_label, best_score = sorted_labels[0]
     runner_up = sorted_labels[1][1] if len(sorted_labels) > 1 else 0.0
+    if best_score == 0.0:
+        return ("Unassigned", 0.0, 0.0)
     return (best_label, best_score, best_score - runner_up)
 
 

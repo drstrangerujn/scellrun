@@ -63,6 +63,10 @@ class QCResult:
     sensitivity: dict[str, list[dict]]  # per-knob: [{threshold, n_pass, pct_pass}, ...]
     findings: list[SelfCheckFinding] = field(default_factory=list)
     """v0.8 self-check findings (low pass-rate etc.); empty when all looks fine."""
+    doublet_threshold_collapsed: bool = False
+    """True when scrublet ran but auto-threshold yielded zero predicted doublets
+    despite a non-trivial doublet_score spread (max > 0.3). The QC report
+    surfaces this so users don't read "0 doublets" as "data is clean"."""
 
 
 class InvalidInputError(ValueError):
@@ -193,11 +197,27 @@ def run_qc(
     )
 
     n_doublets = 0
+    doublet_threshold_collapsed = False
     if flag_doublets:
+        # scanpy 1.11 deprecated sc.external.pp.scrublet → sc.pp.scrublet.
+        # Prefer the new path; fall back to the external path for older scanpy.
+        scrublet_fn = getattr(sc.pp, "scrublet", None) or sc.external.pp.scrublet
         try:
-            sc.external.pp.scrublet(adata)
+            scrublet_fn(adata)
             obs["scellrun_doublet_flag"] = obs["predicted_doublet"]
             n_doublets = int(obs["scellrun_doublet_flag"].sum())
+            # Scrublet's auto-threshold occasionally fails to find a bimodal
+            # cut and returns "no doublets" even when the score distribution
+            # is clearly heterogeneous. Surface that case so the QC summary
+            # doesn't silently say "0 doublets" when the real story is
+            # "auto-threshold collapsed". See ISSUES.md #004 from the v0.7
+            # OA dogfood (12k cells, max doublet_score 0.52, predicted=0).
+            if (
+                n_doublets == 0
+                and "doublet_score" in obs.columns
+                and float(obs["doublet_score"].max()) > 0.3
+            ):
+                doublet_threshold_collapsed = True
         except Exception:
             obs["scellrun_doublet_flag"] = False
 
@@ -322,6 +342,7 @@ def run_qc(
         top_flagged=top_flagged,
         sensitivity=sensitivity,
         findings=findings,
+        doublet_threshold_collapsed=doublet_threshold_collapsed,
     )
 
 

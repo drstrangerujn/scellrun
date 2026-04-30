@@ -318,11 +318,18 @@ def run_integrate(
     # Scale + PCA on HVGs only — matches Seurat's default and avoids paying the
     # HVG-selection cost for nothing.
     sc.pp.scale(adata, max_value=10)
-    sc.tl.pca(
-        adata,
-        n_comps=min(n_pcs, adata.n_obs - 1, adata.n_vars - 1),
-        use_highly_variable=True,
-    )
+    # scanpy 1.11 deprecated `use_highly_variable=True` in favor of
+    # `mask_var="highly_variable"`. Detect support and prefer the new arg
+    # so we don't spam FutureWarnings on every run.
+    import inspect
+
+    pca_kwargs: dict = dict(n_comps=min(n_pcs, adata.n_obs - 1, adata.n_vars - 1))
+    pca_sig = inspect.signature(sc.tl.pca).parameters
+    if "mask_var" in pca_sig:
+        pca_kwargs["mask_var"] = "highly_variable"
+    else:
+        pca_kwargs["use_highly_variable"] = True
+    sc.tl.pca(adata, **pca_kwargs)
 
     # Integration
     use_rep = "X_pca"

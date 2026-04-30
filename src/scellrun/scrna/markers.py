@@ -120,6 +120,16 @@ def run_markers(
         rg = adata.uns[f"rank_{key}"]
         cluster_names = list(rg["names"].dtype.names)
 
+        # scanpy 1.11 stores `pts` and `pts_rest` as DataFrames indexed by
+        # gene with cluster columns. Indexing with a positional integer key
+        # (the v0.7 path: `rg["pts"][c][i]`) emits a FutureWarning per call
+        # — at ~30k cells × 5 resolutions this floods the log. Look up by
+        # gene name via `.at[gene, cluster]` instead.
+        pts = rg.get("pts") if hasattr(rg, "get") else (rg["pts"] if "pts" in rg else None)
+        pts_rest = rg.get("pts_rest") if hasattr(rg, "get") else (
+            rg["pts_rest"] if "pts_rest" in rg else None
+        )
+
         rows: list[dict] = []
         for c in cluster_names:
             for i in range(len(rg["names"][c])):
@@ -127,9 +137,24 @@ def run_markers(
                 logfc = float(rg["logfoldchanges"][c][i])
                 pval_adj = float(rg["pvals_adj"][c][i])
                 pval = float(rg["pvals"][c][i])
-                # pts is added when pts=True, dict-of-arrays
-                pct_in = float(rg["pts"][c][i]) if "pts" in rg else float("nan")
-                pct_out = float(rg["pts_rest"][c][i]) if "pts_rest" in rg else float("nan")
+                if pts is not None and hasattr(pts, "at"):
+                    pct_in = float(pts.at[gene, c]) if gene in pts.index else float("nan")
+                elif pts is not None:
+                    pct_in = float(pts[c].iloc[i]) if hasattr(pts[c], "iloc") else float(pts[c][i])
+                else:
+                    pct_in = float("nan")
+                if pts_rest is not None and hasattr(pts_rest, "at"):
+                    pct_out = (
+                        float(pts_rest.at[gene, c]) if gene in pts_rest.index else float("nan")
+                    )
+                elif pts_rest is not None:
+                    pct_out = (
+                        float(pts_rest[c].iloc[i])
+                        if hasattr(pts_rest[c], "iloc")
+                        else float(pts_rest[c][i])
+                    )
+                else:
+                    pct_out = float("nan")
                 rows.append({
                     "cluster": c,
                     "gene": gene,
@@ -145,7 +170,14 @@ def run_markers(
             df = df[df["log2fc"] > 0]
         df = df[df["log2fc"].abs() >= logfc_threshold]
         df = df[df["pct_in_cluster"] >= pct_min]
-        df = df.sort_values(["cluster", "log2fc"], ascending=[True, False]).reset_index(drop=True)
+        # Sort within each cluster by pval_adj asc (most significant first), then
+        # log2fc desc as tiebreak. Sorting purely by log2fc was floating
+        # zero-vs-near-zero rare-gene rows (log2fc ~20, pval ~1) above the real
+        # markers in the report — see ISSUES.md #002 from the v0.7 OA dogfood.
+        df = df.sort_values(
+            ["cluster", "pval_adj", "log2fc"],
+            ascending=[True, True, False],
+        ).reset_index(drop=True)
 
         per_res_df[res] = df
         n_markers_per_resolution[res] = len(df)

@@ -105,8 +105,13 @@ def build_report(
     )
     template_name = "scrna_full_report_zh.html.j2" if lang == "zh" else "scrna_full_report.html.j2"
     template = env.get_template(template_name)
+    # Render only the run-dir basename in the report. Showing the absolute
+    # path leaks the user's filesystem layout (e.g. /tmp/foo, /home/.../...)
+    # into a deliverable that gets emailed / printed-to-PDF, and the path
+    # stops being valid once the report moves. See ISSUES.md #008 from the
+    # v0.7 OA dogfood.
     html = template.render(
-        run_dir=str(run_dir.resolve()),
+        run_dir=run_dir.name,
         stages=stages,
         manifest=manifest,
         decisions_by_stage=decisions_by_stage,

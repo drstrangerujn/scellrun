@@ -33,7 +33,7 @@
   <dt>pct_mt — median</dt>   <dd>{{ "%.2f"|format(result.pct_mt_median) }}%</dd>
   <dt>pct_mt — 95th pctile</dt><dd>{{ "%.2f"|format(result.pct_mt_p95) }}%</dd>
   <dt>pct_hb — median</dt>   <dd>{{ "%.2f"|format(result.pct_hb_median) }}%</dd>
-  <dt>Doublets flagged</dt>  <dd>{{ "{:,}".format(result.n_doublets_flagged) }}</dd>
+  <dt>Doublets flagged</dt>  <dd>{{ "{:,}".format(result.n_doublets_flagged) }}{% if result.doublet_threshold_collapsed %} <span style="color:#a55; font-size:.85rem;">(scrublet auto-threshold did not converge — pick a manual cutoff from the doublet_score distribution)</span>{% endif %}</dd>
   <dt>Input matrix shape</dt><dd>{{ raw_counts_check }}</dd>
 </dl>
 
