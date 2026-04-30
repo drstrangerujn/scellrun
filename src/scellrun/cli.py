@@ -229,6 +229,9 @@ def scrna_integrate(
     write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Write integrated.h5ad with PCA/UMAP/clusters attached."),
     force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing 02_integrate/ artifacts."),
     lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+    use_ai: bool = typer.Option(False, "--ai/--no-ai", help="Get an LLM resolution recommendation in the report. Requires ANTHROPIC_API_KEY."),
+    ai_model: str = typer.Option("claude-haiku-4-5-20251001", "--ai-model", help="Anthropic model for the resolution recommender."),
+    tissue: str | None = typer.Option(None, "--tissue", help="Tissue context (e.g. 'osteoarthritis cartilage'). Used by the AI recommender."),
 ) -> None:
     """
     Cross-sample integration with multi-resolution Leiden clustering.
@@ -317,6 +320,9 @@ def scrna_integrate(
             regress_cell_cycle=regress_cell_cycle,
             species=species,
             drop_qc_fail=drop_qc_fail,
+            use_ai=use_ai,
+            ai_model=ai_model,
+            tissue=tissue,
         )
     except (IntegrationError, NotImplementedError) as e:
         console.print(f"[red]error:[/red] {e}")
@@ -591,6 +597,45 @@ def scrna_annotate(
     console.print(f"annotations CSV: {artifacts['annotations']}")
     if "annotated_h5ad" in artifacts:
         console.print(f"annotated h5ad: {artifacts['annotated_h5ad']}")
+
+
+@app.command("report")
+def report_cmd(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, readable=True, help="Run directory (e.g. scellrun_out/run-...)."),
+    out: Path | None = typer.Option(None, "--out", "-o", help="Override output dir. Default: <run-dir>/05_report/."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing 05_report/ artifacts."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+) -> None:
+    """
+    Stitch QC + integrate + markers + annotate into a single HTML report
+    (index.html) with the three-tier provenance trail. Open in a browser
+    to read; print-to-PDF for a publication-style deliverable.
+    """
+    from scellrun.report import build_report
+    from scellrun.runlayout import StageOutputExists, stage_dir, write_run_meta
+
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+
+    if out is not None:
+        out_dir = out
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            out_dir = stage_dir(run_dir, "report", force=force)
+        except StageOutputExists as e:
+            console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(2) from None
+
+    console.print(f"[bold]scellrun report[/bold]  •  run-dir=[dim]{run_dir}[/dim]  out=[dim]{out_dir}[/dim]")
+    artifacts = build_report(run_dir, out_dir, lang=lang)
+    write_run_meta(
+        run_dir,
+        command="report",
+        params={"out_dir": out_dir, "lang": lang, "force": force},
+    )
+    console.print(f"[bold]index:[/bold] [link=file://{artifacts['index'].resolve()}]{artifacts['index']}[/link]")
 
 
 @profiles_app.command("list")

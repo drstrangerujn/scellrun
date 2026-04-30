@@ -23,7 +23,7 @@ SCT vs LogNormalize forking) don't carry over; the working *practice* does.
 | v0.2    | `scellrun scrna integrate` | Cross-sample merge, optional cell-cycle scoring, normalization, PCA, Harmony/RPCA, multi-resolution clustering sweep. Integration QC report. | AIO stage 3-4 + Rmd § 6-8                           |
 | **v0.3** ✓ | `scellrun scrna markers`  | Per-cluster differential markers (Wilcoxon, logfc≥1, pct≥0.25, only-positive) across all resolutions. One CSV per resolution + HTML report with top-N per cluster. | AIO stage 5 (`fam()`) + Rmd § 10 (`FindAllMarkers`) |
 | **v0.4** ✓ | `scellrun scrna annotate` | Two-tier annotation: deterministic panel match (overlap-fraction with profile's marker dict) + optional `--ai` LLM second opinion via Anthropic API + optional `--pubmed` evidence column. Reports both calls side-by-side; user makes the final pick. | Rmd § 9-10 |
-| v0.5    | `scellrun report`         | Publication-quality PDF deliverable: 10-section narrative matching Rmd, three-tier provenance trail (data / inference / literature). | Rmd full structure                                  |
+| **v0.5** ✓ | `scellrun report` + integrate quality scoring | Multi-stage HTML report aggregator (`05_report/index.html`) linking QC + integrate + markers + annotate with the three-tier provenance trail. Integrate also gains per-resolution quality metrics + cluster-size chart + optional `--ai` resolution recommender. Print-to-PDF for publication. | Rmd full structure |
 | v0.6+   | additional profiles + assays | Bulk RNA-seq, metabolomics composite scoring, proteomics integration. Optional `scellrun ai *` namespace for LLM-assisted interpretation. | (PI cohort experience)                              |
 
 ---

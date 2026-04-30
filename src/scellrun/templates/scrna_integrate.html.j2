@@ -34,15 +34,52 @@
   <dt>Cell cycle regressed</dt><dd>{{ result.cc_regressed }}</dd>
 </dl>
 
-<h2>Clusters per resolution</h2>
-<dl class="kv">
-{% for res, n in cluster_counts.items() %}
-  <dt>res = {{ res }}</dt>  <dd>{{ n }} cluster{{ "s" if n != 1 else "" }}</dd>
-{% endfor %}
-</dl>
+<h2>Clusters per resolution + quality</h2>
+<table>
+  <thead>
+    <tr>
+      <th>resolution</th><th>n_clusters</th>
+      <th>largest %</th><th>smallest %</th>
+      <th>singletons (&lt;2%)</th>
+      <th>mixing entropy</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for res, q in quality.items() %}
+    <tr>
+      <td>{{ res }}</td>
+      <td>{{ q.n_clusters }}</td>
+      <td>{{ "%.1f"|format(q.largest_pct) }}%</td>
+      <td>{{ "%.1f"|format(q.smallest_pct) }}%</td>
+      <td>{{ q.n_singletons }}</td>
+      <td>{% if q.mixing_entropy == q.mixing_entropy %}{{ "%.2f"|format(q.mixing_entropy) }}{% else %}n/a{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p style="font-size:.85rem; color:#666;">
+  <em>Largest cluster &gt; 40% often means resolution too low (main population not split).
+  Singleton count high (&lt;2% clusters) means resolution may be fragmenting noise.
+  Mixing entropy near 1 = batches integrated well.</em>
+</p>
+
+{% if ai_rec %}
+<div class="rationale" style="background:#eff5e9; border-left-color:#5a8;">
+  <strong>AI recommendation:</strong> resolution = {{ ai_rec.recommended_resolution }}<br>
+  <span style="font-size:.92rem;">{{ ai_rec.rationale }}</span><br>
+  <span style="font-size:.78rem; color:#777;">(model suggestion — sanity-check against the table above; you make the final call)</span>
+</div>
+{% endif %}
 
 <h2>UMAP grid</h2>
 <img class="umap" src="{{ umap_grid_filename }}" alt="UMAP per resolution">
+
+<h2>Cluster size distribution</h2>
+<img class="umap" src="{{ sizes_filename }}" alt="Cluster sizes per resolution">
+<p style="font-size:.85rem; color:#666;">
+  Shows how cells distribute across clusters at each resolution. A long tail of
+  tiny clusters at the right edge usually means the resolution is too high.
+</p>
 
 <div class="rationale">
   <strong>Reading the grid:</strong> the same UMAP layout, colored by cluster

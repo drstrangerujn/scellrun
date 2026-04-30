@@ -30,15 +30,51 @@
   <dt>是否回归细胞周期</dt>       <dd>{{ result.cc_regressed }}</dd>
 </dl>
 
-<h2>各分辨率下的聚类数</h2>
-<dl class="kv">
-{% for res, n in cluster_counts.items() %}
-  <dt>resolution = {{ res }}</dt>  <dd>{{ n }} 个 cluster</dd>
-{% endfor %}
-</dl>
+<h2>各分辨率的聚类数 + 质量指标</h2>
+<table>
+  <thead>
+    <tr>
+      <th>resolution</th><th>cluster 数</th>
+      <th>最大占比</th><th>最小占比</th>
+      <th>singleton 数（&lt;2%）</th>
+      <th>样本混合熵</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for res, q in quality.items() %}
+    <tr>
+      <td>{{ res }}</td>
+      <td>{{ q.n_clusters }}</td>
+      <td>{{ "%.1f"|format(q.largest_pct) }}%</td>
+      <td>{{ "%.1f"|format(q.smallest_pct) }}%</td>
+      <td>{{ q.n_singletons }}</td>
+      <td>{% if q.mixing_entropy == q.mixing_entropy %}{{ "%.2f"|format(q.mixing_entropy) }}{% else %}—{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p style="font-size:.85rem; color:#666;">
+  <em>最大 cluster &gt; 40% 一般说明 resolution 太低（主群没分开）；
+  singleton 多说明 resolution 太高（碎成噪声）；
+  样本混合熵接近 1 说明批次整合到位。</em>
+</p>
+
+{% if ai_rec %}
+<div class="rationale" style="background:#eff5e9; border-left-color:#5a8;">
+  <strong>AI 推荐：</strong>resolution = {{ ai_rec.recommended_resolution }}<br>
+  <span style="font-size:.92rem;">{{ ai_rec.rationale }}</span><br>
+  <span style="font-size:.78rem; color:#777;">（模型建议——对照上表自己判断，最终拍板在你）</span>
+</div>
+{% endif %}
 
 <h2>UMAP 网格</h2>
 <img class="umap" src="{{ umap_grid_filename }}" alt="UMAP（每个分辨率）">
+
+<h2>Cluster 大小分布</h2>
+<img class="umap" src="{{ sizes_filename }}" alt="每个 resolution 下的 cluster 大小">
+<p style="font-size:.85rem; color:#666;">
+  显示每个 resolution 下细胞在各 cluster 的分布。右侧出现一长串小 cluster 一般意味着 resolution 太高。
+</p>
 
 <div class="rationale">
   <strong>怎么看这张图：</strong>同一个 UMAP 布局，按不同 resolution 下的 cluster 上色。

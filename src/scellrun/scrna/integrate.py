@@ -54,11 +54,160 @@ class IntegrateResult:
     cluster_counts: dict[float, int]
     sample_key: str | None
     cc_regressed: bool
+    # v0.5: quality metrics per resolution. Keys are resolution floats; each
+    # value is {largest_pct, smallest_pct, n_singletons, mixing_entropy, ...}
+    quality: dict[float, dict[str, float | int]] | None = None
+    ai_recommendation: dict[str, str] | None = None  # {recommended_resolution, rationale}
 
 
 def _to_mouse_case(genes: tuple[str, ...]) -> tuple[str, ...]:
     """Mouse cell-cycle genes are the same symbols, lowercase except first letter."""
     return tuple(g[0] + g[1:].lower() for g in genes)
+
+
+def _shannon_entropy_normalized(values: pd.Series) -> float:
+    """
+    Shannon entropy of a categorical distribution, normalized to [0, 1] by
+    dividing by log(k) where k is the number of categories. 1 = uniform mix,
+    0 = one category dominates.
+    """
+    import math
+
+    counts = values.value_counts()
+    if len(counts) <= 1:
+        return 0.0
+    p = counts.values / counts.sum()
+    h = float(-sum(pi * math.log(pi) for pi in p if pi > 0))
+    return h / math.log(len(counts))
+
+
+def compute_resolution_quality(
+    adata: ad.AnnData,
+    resolutions: tuple[float, ...],
+    sample_key: str | None,
+) -> dict[float, dict[str, float | int]]:
+    """
+    For each requested resolution, compute objective metrics that help a user
+    (or the LLM recommender) pick a resolution.
+
+    Metrics:
+        n_clusters         total Leiden clusters at this resolution
+        largest_pct        % of cells in the biggest cluster (>40% often = res too low)
+        smallest_pct       % of cells in the smallest cluster (<2% often = fragmented)
+        n_singletons       clusters with <2% of cells
+        mixing_entropy     mean per-cluster sample-mixing entropy (only if sample_key);
+                           1 = each cluster is a uniform mix of samples
+                           (high = batches integrated well)
+    """
+    out: dict[float, dict[str, float | int]] = {}
+    n_total = adata.n_obs
+
+    for res in resolutions:
+        key = f"leiden_res_{res:g}".replace(".", "_")
+        if key not in adata.obs.columns:
+            continue
+        sizes = adata.obs[key].value_counts()
+        n_clusters = int(len(sizes))
+        if n_clusters == 0:
+            continue
+        largest_pct = float(100.0 * sizes.max() / n_total)
+        smallest_pct = float(100.0 * sizes.min() / n_total)
+        # Singleton-ish clusters: <2% of all cells
+        n_singletons = int((sizes / n_total < 0.02).sum())
+
+        mixing = float("nan")
+        if sample_key is not None and sample_key in adata.obs.columns:
+            per_cluster = []
+            for cluster_id in sizes.index:
+                mask = adata.obs[key] == cluster_id
+                per_cluster.append(_shannon_entropy_normalized(adata.obs.loc[mask, sample_key]))
+            mixing = float(sum(per_cluster) / len(per_cluster)) if per_cluster else float("nan")
+
+        out[res] = {
+            "n_clusters": n_clusters,
+            "largest_pct": largest_pct,
+            "smallest_pct": smallest_pct,
+            "n_singletons": n_singletons,
+            "mixing_entropy": mixing,
+        }
+    return out
+
+
+def _ai_recommend_resolution(
+    quality: dict[float, dict[str, float | int]],
+    *,
+    tissue: str | None,
+    n_cells: int,
+    sample_key: str | None,
+    model: str = "claude-haiku-4-5-20251001",
+) -> dict[str, str] | None:
+    """
+    Optional LLM recommendation of which resolution to pick. Returns dict
+    {recommended_resolution, rationale} or None on any failure (network,
+    no key, etc). Failure is non-fatal — the report just omits the AI line.
+    """
+    import os
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return None
+
+    table_rows = []
+    for res, m in sorted(quality.items()):
+        table_rows.append(
+            f"  res={res}: n={m['n_clusters']} clusters, "
+            f"largest {m['largest_pct']:.1f}%, smallest {m['smallest_pct']:.1f}%, "
+            f"singletons {m['n_singletons']}, "
+            f"mixing {m['mixing_entropy']:.2f}"
+        )
+    table_str = "\n".join(table_rows)
+    tissue_str = f"Tissue context: {tissue}.\n" if tissue else ""
+    sample_str = f"Sample key: {sample_key}.\n" if sample_key else "Single-batch (no sample key).\n"
+
+    prompt = f"""You are advising on Leiden resolution choice for a single-cell RNA-seq dataset.
+
+Dataset: {n_cells:,} cells.
+{sample_str}{tissue_str}
+
+Per-resolution quality metrics:
+{table_str}
+
+Heuristics:
+- largest cluster > 40% often means resolution is too low (main population not split)
+- smallest cluster < 2% (=singleton) means resolution may be fragmenting noise
+- mixing_entropy near 1.0 means batches integrated well (only relevant if sample_key)
+- the right resolution usually balances cluster count against interpretability
+
+Pick ONE resolution from the table and explain in 1-2 sentences. Format:
+RECOMMENDED: <resolution number>
+RATIONALE: <one or two sentences>
+"""
+    try:
+        client = Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model=model,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = msg.content[0].text if msg.content else ""
+    except Exception:
+        return None
+
+    rec = None
+    rationale = None
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("RECOMMENDED:"):
+            rec = line.removeprefix("RECOMMENDED:").strip()
+        elif line.startswith("RATIONALE:"):
+            rationale = line.removeprefix("RATIONALE:").strip()
+    if rec is None:
+        return None
+    return {"recommended_resolution": rec, "rationale": rationale or ""}
 
 
 class IntegrationError(RuntimeError):
@@ -75,6 +224,9 @@ def run_integrate(
     regress_cell_cycle: bool = False,
     species: str = "human",
     drop_qc_fail: bool = True,
+    use_ai: bool = False,
+    ai_model: str = "claude-haiku-4-5-20251001",
+    tissue: str | None = None,
 ) -> IntegrateResult:
     """
     Integrate one or more samples and run multi-resolution clustering.
@@ -199,6 +351,18 @@ def run_integrate(
         )
         cluster_counts[res] = int(adata.obs[key].nunique())
 
+    quality = compute_resolution_quality(adata, tuple(resolutions), sample_key)
+
+    ai_rec = None
+    if use_ai:
+        ai_rec = _ai_recommend_resolution(
+            quality,
+            tissue=tissue,
+            n_cells=n_cells_used,
+            sample_key=sample_key,
+            model=ai_model,
+        )
+
     return IntegrateResult(
         n_cells_in=n_cells_in,
         n_cells_used=n_cells_used,
@@ -208,6 +372,8 @@ def run_integrate(
         cluster_counts=cluster_counts,
         sample_key=sample_key,
         cc_regressed=cc_regressed,
+        quality=quality,
+        ai_recommendation=ai_rec,
     ), adata
 
 
@@ -247,6 +413,23 @@ def write_artifacts(
     plt.close(fig)
     artifacts["umap_grid"] = umap_path
 
+    # v0.5: cluster size distribution chart per resolution
+    fig2, axes2 = plt.subplots(1, n, figsize=(3.5 * n, 3.2), squeeze=False)
+    for i, res in enumerate(result.resolutions):
+        key = f"leiden_res_{res:g}".replace(".", "_")
+        sizes = adata.obs[key].value_counts().sort_values(ascending=False)
+        ax = axes2[0, i]
+        ax.bar(range(len(sizes)), sizes.values, color="#3d6fa3")
+        ax.set_title(f"res={res:g}")
+        ax.set_xlabel("cluster (sorted)")
+        ax.set_ylabel("cells")
+        ax.set_xticks([])
+    fig2.tight_layout()
+    sizes_path = out_dir / "cluster_sizes.png"
+    fig2.savefig(sizes_path, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+    artifacts["cluster_sizes"] = sizes_path
+
     # Cluster x sample contingency for the middle resolution
     ratio_path: Path | None = None
     if result.sample_key is not None and len(result.resolutions) > 0:
@@ -267,7 +450,10 @@ def write_artifacts(
     html = template.render(
         result=result,
         cluster_counts=result.cluster_counts,
+        quality=result.quality or {},
+        ai_rec=result.ai_recommendation,
         umap_grid_filename=umap_path.name,
+        sizes_filename=sizes_path.name,
         ratio_filename=ratio_path.name if ratio_path else None,
     )
     html_path = out_dir / "report.html"
