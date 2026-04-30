@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import anndata as ad
 import numpy as np
@@ -9,12 +10,14 @@ import pytest
 
 from scellrun.decisions import (
     DECISIONS_FILENAME,
+    SCHEMA_VERSION,
     Decision,
     decisions_path,
     group_by_stage,
     read_decisions,
     record,
     record_many,
+    truncate_stage,
 )
 
 
@@ -27,6 +30,7 @@ def test_decision_roundtrip(tmp_path):
         default=10.0,
         source="auto",
         rationale="joint tissue is stress-prone",
+        attempt_id="abc123",
     )
     record(tmp_path, d)
     p = decisions_path(tmp_path)
@@ -42,6 +46,55 @@ def test_decision_roundtrip(tmp_path):
     assert rows[0]["source"] == "auto"
     assert "stress-prone" in rows[0]["rationale"]
     assert "ts" in rows[0]
+    # v0.9.1: schema_version + attempt_id + fix_payload round-trip.
+    assert rows[0]["schema_version"] == SCHEMA_VERSION
+    assert rows[0]["attempt_id"] == "abc123"
+    assert rows[0]["fix_payload"] is None
+
+
+def test_decision_from_choice_user_override():
+    """from_choice with is_user_override=True yields source='user'."""
+    d = Decision.from_choice(
+        stage="qc",
+        key="max_pct_mt",
+        value=10.0,
+        default=20.0,
+        is_user_override=True,
+        rationale="user tightened it",
+    )
+    assert d.source == "user"
+
+
+def test_decision_from_choice_auto_when_value_differs_from_default():
+    """
+    A2: value != default does NOT imply user override. The orchestrator's
+    chosen_resolution_for_annotate is `auto` regardless of whether the
+    chosen value happens to differ from a hardcoded default.
+    """
+    d = Decision.from_choice(
+        stage="analyze",
+        key="chosen_resolution_for_annotate",
+        value=0.3,
+        default=None,
+        is_user_override=False,
+        rationale="picked from quality table",
+    )
+    assert d.source == "auto"
+
+
+def test_decision_fix_payload_round_trip(tmp_path):
+    """fix_payload survives the JSONL round-trip and stays a dict."""
+    d = Decision(
+        stage="qc",
+        key="self_check.qc_low_pass_rate.suggest",
+        value="raise --max-pct-mt to 25",
+        source="auto",
+        rationale="...",
+        fix_payload={"max_pct_mt": 25},
+    )
+    record(tmp_path, d)
+    rows = read_decisions(tmp_path)
+    assert rows[0]["fix_payload"] == {"max_pct_mt": 25}
 
 
 def test_decision_appends(tmp_path):
@@ -194,6 +247,86 @@ def test_analyze_pipeline_writes_non_empty_decisions(planted_h5ad, tmp_path, mon
     ]
     assert len(chosen) == 1
     assert float(chosen[0]["value"]) in (0.3, 0.5)
+
+
+def test_truncate_stage_drops_only_matching_rows(tmp_path):
+    """truncate_stage(run_dir, 'qc') removes every qc.* row, keeps others."""
+    record_many(
+        tmp_path,
+        [
+            Decision(stage="qc", key="profile", value="default", source="auto"),
+            Decision(stage="qc", key="max_pct_mt", value=20.0, source="auto"),
+            Decision(stage="integrate", key="method", value="harmony", source="auto"),
+            Decision(stage="analyze", key="chosen", value=0.5, source="auto"),
+        ],
+    )
+    n = truncate_stage(tmp_path, "qc")
+    assert n == 2
+    rows = read_decisions(tmp_path)
+    assert {(r["stage"], r["key"]) for r in rows} == {
+        ("integrate", "method"),
+        ("analyze", "chosen"),
+    }
+
+
+def test_truncate_stage_no_op_when_file_missing(tmp_path):
+    assert truncate_stage(tmp_path / "nope", "qc") == 0
+    assert truncate_stage(tmp_path, "qc") == 0  # file doesn't exist yet
+
+
+def test_concurrent_appends_no_truncated_lines(tmp_path):
+    """
+    A4: two threads writing record_many concurrently produce a JSONL file
+    where line_count == thread_a_writes + thread_b_writes and every line
+    parses as JSON. Without flock, interleaving from competing writers can
+    leave half-flushed lines.
+    """
+    barrier = threading.Barrier(2)
+    n_per_thread = 50
+    decisions_a = [
+        Decision(
+            stage="qc",
+            key=f"a_{i}",
+            value=i,
+            source="auto",
+            rationale="x" * 200,  # big-ish payload to make interleaving plausible
+        )
+        for i in range(n_per_thread)
+    ]
+    decisions_b = [
+        Decision(
+            stage="integrate",
+            key=f"b_{i}",
+            value=i,
+            source="auto",
+            rationale="y" * 200,
+        )
+        for i in range(n_per_thread)
+    ]
+
+    def writer_a() -> None:
+        barrier.wait()
+        record_many(tmp_path, decisions_a)
+
+    def writer_b() -> None:
+        barrier.wait()
+        record_many(tmp_path, decisions_b)
+
+    t_a = threading.Thread(target=writer_a)
+    t_b = threading.Thread(target=writer_b)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join()
+
+    p = decisions_path(tmp_path)
+    raw_lines = p.read_text(encoding="utf-8").splitlines()
+    assert len(raw_lines) == n_per_thread * 2
+    for line in raw_lines:
+        json.loads(line)  # must parse — no half-flushed half-line
+    rows = read_decisions(tmp_path)
+    keys = {r["key"] for r in rows}
+    assert len(keys) == n_per_thread * 2
 
 
 def test_multistage_report_renders_decision_summary(planted_h5ad, tmp_path, monkeypatch):

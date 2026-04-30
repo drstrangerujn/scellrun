@@ -59,24 +59,51 @@ def test_pick_best_resolution_prefers_more_clusters_when_clean():
         0.8: {"n_clusters": 7, "n_singletons": 3, "largest_pct": 35.0, "smallest_pct": 1.0,
               "mixing_entropy": 0.85},
     }
-    assert _pick_best_resolution(quality) == 0.5
+    res, _ = _pick_best_resolution(quality)
+    assert res == 0.5
 
 
 def test_pick_best_resolution_falls_back_when_empty():
-    assert _pick_best_resolution({}) == 0.5
-    assert _pick_best_resolution(None) == 0.5
-    assert _pick_best_resolution({}, fallback=0.3) == 0.3
+    res, _ = _pick_best_resolution({})
+    assert res == 0.5
+    res, _ = _pick_best_resolution(None)
+    assert res == 0.5
+    res, _ = _pick_best_resolution({}, fallback=0.3)
+    assert res == 0.3
 
 
 def test_pick_best_resolution_handles_only_fragmented():
-    """If every resolution has many singletons, still pick the max n_clusters one."""
+    """
+    v0.9.1 (#005): every resolution has >1 singleton → prefer FEWEST
+    singletons; tie-break by smallest largest_pct. The pre-patch behavior
+    picked the most fragmented (max n_clusters) — exactly the trap that
+    fired on real OA data.
+    """
     quality = {
         0.3: {"n_clusters": 4, "n_singletons": 3, "largest_pct": 60.0, "smallest_pct": 0.5,
               "mixing_entropy": 0.5},
         0.5: {"n_clusters": 6, "n_singletons": 4, "largest_pct": 55.0, "smallest_pct": 0.4,
               "mixing_entropy": 0.5},
     }
-    assert _pick_best_resolution(quality) == 0.5
+    # Fewest singletons wins → res 0.3 (3 singletons vs 4)
+    res, criterion = _pick_best_resolution(quality)
+    assert res == 0.3
+    assert "singleton" in criterion
+
+
+def test_pick_best_resolution_fragmented_ties_break_by_largest_pct():
+    """
+    When two resolutions tie on n_singletons, the one with the smallest
+    largest_pct (most balanced) wins.
+    """
+    quality = {
+        0.3: {"n_clusters": 5, "n_singletons": 3, "largest_pct": 60.0, "smallest_pct": 1.0,
+              "mixing_entropy": 0.5},
+        0.5: {"n_clusters": 7, "n_singletons": 3, "largest_pct": 35.0, "smallest_pct": 0.5,
+              "mixing_entropy": 0.5},
+    }
+    res, _ = _pick_best_resolution(quality)
+    assert res == 0.5  # tie on singletons (3), 0.5 has smaller largest_pct
 
 
 def test_analyze_end_to_end_creates_all_stage_dirs(planted_h5ad, tmp_path, monkeypatch):
@@ -145,6 +172,43 @@ def test_analyze_end_to_end_creates_all_stage_dirs(planted_h5ad, tmp_path, monke
     assert set(result.stages_completed) == {"qc", "integrate", "markers", "annotate", "report"}
     assert result.report_index == run_dir / "05_report" / "index.html"
     assert result.chosen_resolution in (0.3, 0.5)
+
+
+def test_analyze_auto_resume_on_incomplete_prior_run(planted_h5ad, tmp_path, monkeypatch):
+    """
+    v0.9.1 (#010): if a previous run aborted mid-pipeline (stage subdir
+    exists but has no completed report.html), `analyze` without --force
+    should overwrite that stage instead of erroring on StageOutputExists.
+    Records an `<stage>.auto_resume` decision row noting the implicit
+    overwrite.
+    """
+    from scellrun.analyze import run_analyze
+    from scellrun.decisions import read_decisions
+    from scellrun.runlayout import STAGE_DIRS
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    run_dir = tmp_path / "run"
+    # Plant an incomplete 02_integrate dir (no report.html) so analyze
+    # has to auto-resume past it.
+    (run_dir / STAGE_DIRS["integrate"]).mkdir(parents=True)
+    (run_dir / STAGE_DIRS["integrate"] / "stale.txt").write_text("partial")
+
+    run_analyze(
+        planted_h5ad,
+        profile="joint-disease",
+        run_dir=run_dir,
+        resolutions=(0.5,),
+        method="none",
+        use_ai=False,
+        force=False,  # NOT --force; auto-resume should still work
+    )
+
+    rows = read_decisions(run_dir)
+    auto_resume_keys = [
+        r for r in rows
+        if r["stage"] == "analyze" and str(r["key"]).endswith("auto_resume")
+    ]
+    assert auto_resume_keys, "expected an *.auto_resume decision row"
 
 
 def test_analyze_force_allows_rerun(planted_h5ad, tmp_path, monkeypatch):

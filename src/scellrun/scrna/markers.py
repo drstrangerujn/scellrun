@@ -60,6 +60,10 @@ def run_markers(
     only_positive: bool = True,
     top_n_per_cluster: int = DEFAULT_TOP_N_PER_CLUSTER,
     run_dir: Path | None = None,
+    logfc_threshold_user_supplied: bool = False,
+    pct_min_user_supplied: bool = False,
+    only_positive_user_supplied: bool = False,
+    attempt_id: str = "",
 ) -> tuple[MarkersResult, dict[float, pd.DataFrame]]:
     """
     Compute per-cluster markers at one or more clustering resolutions.
@@ -195,45 +199,49 @@ def run_markers(
 
     if run_dir is not None:
         decisions: list[Decision] = [
-            Decision(
+            Decision.from_choice(
                 stage="markers",
                 key="resolutions",
                 value=list(resolutions),
                 default=None,
-                source="user" if resolutions_user_supplied else "auto",
+                is_user_override=resolutions_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     "user-supplied resolutions list"
                     if resolutions_user_supplied
                     else "auto-detected from leiden_res_* columns in the integrated h5ad"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="markers",
                 key="logfc_threshold",
                 value=logfc_threshold,
                 default=DEFAULT_LOGFC,
-                source="user" if logfc_threshold != DEFAULT_LOGFC else "auto",
+                is_user_override=logfc_threshold_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"|log2fc| >= {logfc_threshold} — Seurat in-house default; "
                     "tightens to 1.0 to drop near-zero-effect markers"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="markers",
                 key="pct_min",
                 value=pct_min,
                 default=DEFAULT_PCT_MIN,
-                source="user" if pct_min != DEFAULT_PCT_MIN else "auto",
+                is_user_override=pct_min_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"min fraction expressing >= {pct_min} — drops genes hit by dropout in the focal cluster"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="markers",
                 key="only_positive",
                 value=only_positive,
                 default=True,
-                source="user" if not only_positive else "auto",
+                is_user_override=only_positive_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     "positive-only markers (cluster-up) — what FindAllMarkers ships by default"
                     if only_positive

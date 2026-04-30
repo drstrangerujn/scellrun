@@ -50,6 +50,17 @@ def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
     False, raise `StageOutputExists`. This guards the silent-overwrite trap
     where re-running a stage into the same run-dir leaves the manifest
     showing two runs but only the latest payload on disk.
+
+    When `force=True` we also truncate the matching ``stage`` rows in
+    ``00_decisions.jsonl``. The artifact dir is overwritten on disk; the
+    decision log was previously left untouched, so each re-run appended a
+    second batch of qc.profile / qc.max_pct_mt / etc. rows. Truncating
+    keeps the log honest: one stage = one set of decisions per active
+    attempt.
+
+    Note: stage_dir does NOT physically remove existing files in the
+    subdir; the caller's writers overwrite specific paths. Stale files
+    left behind are tolerated (the prior policy).
     """
     if stage not in STAGE_DIRS:
         raise ValueError(f"unknown stage {stage!r}; expected one of {list(STAGE_DIRS)}")
@@ -62,6 +73,18 @@ def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
                 "Re-run with --force to overwrite, or pick a fresh --run-dir."
             )
     p.mkdir(parents=True, exist_ok=True)
+    if force:
+        # Drop any prior decisions logged under this stage so reruns don't
+        # double-count them in the report. Imported lazily to avoid a
+        # circular import at module load time.
+        from scellrun.decisions import truncate_stage as _truncate_stage
+
+        try:
+            _truncate_stage(run_dir, stage)
+        except Exception:
+            # Truncation is best-effort cleanup; never block a stage rerun
+            # because of a stale-log housekeeping problem.
+            pass
     return p
 
 

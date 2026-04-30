@@ -129,6 +129,13 @@ def run_qc(
     run_dir: Path | None = None,
     profile: str = "default",
     user_thresholds_overrides: dict[str, object] | None = None,
+    profile_applied_thresholds: ScrnaQCThresholds | None = None,
+    profile_user_supplied: bool = False,
+    assay_user_supplied: bool = False,
+    species_user_supplied: bool = False,
+    lang_user_supplied: bool = False,
+    flag_doublets_user_supplied: bool = False,
+    attempt_id: str = "",
     lang: str = "en",
 ) -> QCResult:
     """
@@ -298,17 +305,32 @@ def run_qc(
     }
 
     if run_dir is not None:
+        # The "default" we report against is the profile-applied baseline,
+        # not the library default. Without this, e.g. joint-disease's mt%
+        # ceiling of 20% (== library SCRNA_QC default) reads as "value
+        # equals default" while a user-tightened mt% to 10% reads as a
+        # user override against the LIBRARY default — both correct only by
+        # coincidence on this profile. Using the profile-applied baseline
+        # keeps the report honest across all profiles.
+        if profile_applied_thresholds is None:
+            profile_applied_thresholds = SNRNA_QC if assay == "snrna" else SCRNA_QC
         _record_qc_decisions(
             run_dir=run_dir,
             profile=profile,
             assay=assay,
             thresholds=thresholds,
-            base_default=SNRNA_QC if assay == "snrna" else SCRNA_QC,
+            base_default=profile_applied_thresholds,
             user_overrides=user_thresholds_overrides or {},
             flag_doublets=flag_doublets,
             flag_doublets_user_choice=flag_doublets_user_choice,
             raw_check=raw_check,
             raw_check_skipped_doublets=raw_check_skipped_doublets,
+            profile_user_supplied=profile_user_supplied,
+            assay_user_supplied=assay_user_supplied,
+            species_user_supplied=species_user_supplied,
+            lang_user_supplied=lang_user_supplied,
+            flag_doublets_user_supplied=flag_doublets_user_supplied,
+            attempt_id=attempt_id,
             lang=lang,
         )
 
@@ -324,7 +346,7 @@ def run_qc(
         thresholds=thresholds,
     )
     if run_dir is not None:
-        record_findings(run_dir, findings)
+        record_findings(run_dir, findings, attempt_id=attempt_id)
 
     return QCResult(
         n_cells_in=n_cells_in,
@@ -358,88 +380,117 @@ def _record_qc_decisions(
     flag_doublets_user_choice: bool,
     raw_check: str,
     raw_check_skipped_doublets: bool,
+    profile_user_supplied: bool,
+    assay_user_supplied: bool,
+    species_user_supplied: bool,
+    lang_user_supplied: bool,
+    flag_doublets_user_supplied: bool,
+    attempt_id: str,
     lang: str,
 ) -> None:
-    """Append all QC-stage decisions to the run-dir's decision log."""
+    """Append all QC-stage decisions to the run-dir's decision log.
+
+    `base_default` is the profile-applied baseline (the dataclass returned
+    from prof.scrna_qc / prof.snrna_qc with the profile's tissue-tuned
+    thresholds applied) — NOT the library default. This way the report's
+    "default" column is empty when the value matches what the active
+    profile would have used; only true user overrides get the
+    user-override styling.
+
+    Each Decision's `source` is decided by `is_user_override` rather than
+    a value-vs-default diff, so e.g. when joint-disease's profile sets
+    max_pct_hb=2.0 (different from the library default 5.0) we still
+    correctly tag it `source="auto"` since the user didn't override it.
+    """
     decisions: list[Decision] = [
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="profile",
             value=profile,
             default="default",
-            source="user" if profile != "default" else "auto",
+            is_user_override=profile_user_supplied,
+            attempt_id=attempt_id,
             rationale=(
                 f"profile {profile!r} chosen; profiles ship tissue-tuned thresholds "
                 "(mt%, hb%) and marker panels."
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="assay",
             value=assay,
             default="scrna",
-            source="user" if assay != "scrna" else "auto",
+            is_user_override=assay_user_supplied,
+            attempt_id=attempt_id,
             rationale=(
                 "snRNA tightens mt% to 5% (nuclei should be ~0% mt by definition)"
                 if assay == "snrna"
                 else "fresh-tissue scRNA defaults; mt% ceiling 20% from PI cohort"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="species",
             value=thresholds.species,
-            default="human",
-            source="user" if thresholds.species != "human" else "auto",
+            default=base_default.species,
+            is_user_override=species_user_supplied,
+            attempt_id=attempt_id,
             rationale=(
                 "drives mt/ribo/hb gene-pattern matching (uppercased; same regex "
                 "covers MT-CO1 and mt-Co1)"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="max_pct_mt",
             value=thresholds.max_pct_mt,
             default=base_default.max_pct_mt,
-            source="user" if "max_pct_mt" in user_overrides else "auto",
+            is_user_override="max_pct_mt" in user_overrides,
+            attempt_id=attempt_id,
             rationale=(
                 f"mt% ceiling {thresholds.max_pct_mt}% — joint tissue is stress-prone, "
                 "the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, "
                 "AIO PM=20)"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="min_genes",
             value=thresholds.min_genes,
             default=base_default.min_genes,
-            source="user" if "min_genes" in user_overrides else "auto",
+            is_user_override="min_genes" in user_overrides,
+            attempt_id=attempt_id,
             rationale=(
                 f"min n_genes {thresholds.min_genes} — Ilicic 2016 / "
                 "Luecken & Theis 2019 droplet-vs-cell floor"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="max_genes",
             value=thresholds.max_genes,
             default=base_default.max_genes,
-            source="user" if "max_genes" in user_overrides else "auto",
+            is_user_override="max_genes" in user_overrides,
+            attempt_id=attempt_id,
             rationale=(
                 f"max n_genes {thresholds.max_genes} — multiplet upper cap on 10x v3 chemistry; "
                 "raise via --max-genes for high-RNA cell types (megakaryocytes, hepatocytes)"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="flag_doublets",
             value=flag_doublets,
             default=base_default.flag_doublets,
-            source=(
-                "auto"
+            # Internal scrublet-skip when the matrix looks normalized is an
+            # auto override — caller didn't ask for it. Only flag as user
+            # when the caller explicitly passed --flag-doublets / --no-flag-doublets.
+            is_user_override=(
+                False
                 if raw_check_skipped_doublets
-                else ("user" if flag_doublets_user_choice != base_default.flag_doublets else "auto")
+                else flag_doublets_user_supplied
             ),
+            attempt_id=attempt_id,
             rationale=(
                 "scrublet skipped — input matrix looks log-normalized, doublet scoring is meaningless on it"
                 if raw_check_skipped_doublets
@@ -450,23 +501,25 @@ def _record_qc_decisions(
                 )
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="raw_counts_check",
             value=raw_check,
             default=None,
-            source="auto",
+            is_user_override=False,
+            attempt_id=attempt_id,
             rationale=(
                 "input matrix sampled (200 rows): integer-valued + max>1 = looks_like_raw; "
                 "non-integer with small max = looks_like_normalized; otherwise unknown"
             ),
         ),
-        Decision(
+        Decision.from_choice(
             stage="qc",
             key="lang",
             value=lang,
             default="en",
-            source="user" if lang != "en" else "auto",
+            is_user_override=lang_user_supplied,
+            attempt_id=attempt_id,
             rationale="report language; both EN and ZH templates kept in sync",
         ),
     ]

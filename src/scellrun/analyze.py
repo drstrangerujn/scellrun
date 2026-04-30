@@ -22,12 +22,17 @@ Design notes:
 from __future__ import annotations
 
 import dataclasses
+import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from scellrun.decisions import Decision, record
 from scellrun.runlayout import (
+    STAGE_DIRS,
     StageOutputExists,
     default_run_dir,
     stage_dir,
@@ -46,6 +51,7 @@ class AnalyzeResult:
     annotate_summary: str
     report_index: Path | None
     chosen_resolution: float
+    attempt_id: str = ""
 
 
 class StageFailure(RuntimeError):
@@ -72,47 +78,261 @@ def _pick_first_actionable(findings: list[Any]) -> dict[str, Any] | None:
     return None
 
 
+def _all_finding_codes(findings: list[Any]) -> list[str]:
+    """Collect every finding's code in the order seen."""
+    return [getattr(f, "code", "") for f in findings if getattr(f, "code", "")]
+
+
 def _summarize_fix_dict(fix: dict[str, Any]) -> str:
     """Compact stringification of a fix dict for decision-log values."""
     return ", ".join(f"{k}={v}" for k, v in fix.items())
 
 
+def _move_to_failed(run_dir: Path, stage: str) -> Path | None:
+    """
+    Rename ``<run_dir>/<NN_stage>/`` to ``<NN_stage>.failed-1/`` and return
+    the new path. Used by the --auto-fix retry path so the failed first-pass
+    artifacts are preserved next to the retry's fresh stage dir.
+
+    If a `.failed-1` already exists (defensive: somebody re-ran twice in a
+    weird state), bump to `.failed-2`, `.failed-3`, … so we never clobber
+    older debug payloads.
+    """
+    sub = STAGE_DIRS.get(stage)
+    if sub is None:
+        return None
+    src = run_dir / sub
+    if not src.exists():
+        return None
+    n = 1
+    while True:
+        dst = run_dir / f"{sub}.failed-{n}"
+        if not dst.exists():
+            break
+        n += 1
+    shutil.move(str(src), str(dst))
+    return dst
+
+
 def _pick_best_resolution(
     quality: dict[float, dict[str, float | int]] | None,
     fallback: float = 0.5,
-) -> float:
+) -> tuple[float, str]:
     """
     Pick the "best" Leiden resolution from `integrate`'s quality table.
 
-    Heuristic: pick the largest n_clusters among non-fragmented resolutions,
-    where "non-fragmented" means at most one singleton cluster (clusters
-    holding < 2% of cells). On ties, prefer the smaller resolution number
-    (more conservative). Falls back to `fallback` if quality is empty or
-    no resolution is non-fragmented.
+    Returns (resolution, criterion_str) — the criterion string explains
+    which branch of the heuristic was used, suitable for the decision-log
+    rationale.
+
+    Heuristic:
+      1. Prefer "non-fragmented" resolutions (≤1 singleton, ≥2 clusters).
+         Among those, take the largest n_clusters; ties broken by smaller
+         resolution number (more conservative).
+      2. If every resolution is fragmented, prefer the resolution with the
+         FEWEST singletons (least fragmented). Tie-break by lowest
+         largest_pct (most balanced). This dodges the v0.7 trap where
+         every resolution had >1 singleton and the picker fell through to
+         max-n_clusters, which on real OA data picked the most fragmented
+         resolution as the annotate target. See ISSUES.md #005.
+      3. Falls back to `fallback` if quality is empty or no resolution has
+         ≥2 clusters.
     """
     if not quality:
-        return fallback
+        return fallback, "fallback (no quality table)"
 
     candidates = [
         (res, m["n_clusters"])
         for res, m in quality.items()
         if int(m.get("n_singletons", 0)) <= 1 and int(m.get("n_clusters", 0)) >= 2
     ]
-    if not candidates:
-        # Every resolution is fragmented. Try "any with >=2 clusters", else fallback.
-        any_two_plus = [
-            (res, m["n_clusters"])
-            for res, m in quality.items()
-            if int(m.get("n_clusters", 0)) >= 2
-        ]
-        if not any_two_plus:
-            return fallback
-        candidates = any_two_plus
+    if candidates:
+        max_n = max(int(n) for _, n in candidates)
+        best = min(res for res, n in candidates if int(n) == max_n)
+        return float(best), "largest n_clusters among non-fragmented (≤1 singleton)"
 
-    # max n_clusters, ties broken by smallest resolution number
-    max_n = max(int(n) for _, n in candidates)
-    best = min(res for res, n in candidates if int(n) == max_n)
-    return float(best)
+    # Every resolution is fragmented OR has <2 clusters. Among those with
+    # ≥2 clusters, prefer fewest singletons → smallest largest_pct. This
+    # gives the user the LEAST fragmented + most balanced resolution
+    # available, instead of the most fragmented (= max n_clusters) one.
+    any_two_plus = [
+        (res, m) for res, m in quality.items() if int(m.get("n_clusters", 0)) >= 2
+    ]
+    if not any_two_plus:
+        return fallback, "fallback (no resolution had ≥2 clusters)"
+
+    def _key(item: tuple[float, dict[str, Any]]) -> tuple[int, float, float]:
+        _, m = item
+        return (
+            int(m.get("n_singletons", 0)),
+            float(m.get("largest_pct", 0.0)),
+            float(item[0]),
+        )
+
+    best_res, _ = min(any_two_plus, key=_key)
+    return float(best_res), "fewest singletons → most balanced (every resolution fragmented)"
+
+
+def _autopick_panel_for_data(
+    profile_module: Any,
+    integrated_adata: Any,
+    chosen_res: float,
+) -> tuple[str, str]:
+    """
+    Decide which panel to use when both `chondrocyte_markers` and
+    `celltype_broad` are defined on the profile.
+
+    Heuristic (issue #003 part 2): if a majority of clusters at the
+    chosen resolution have hits in the celltype_broad panel WITHOUT
+    chondrocyte_markers hits, the data is plainly non-chondrocyte (e.g.
+    subchondral bone, synovium, fluid). Auto-pick celltype_broad in that
+    case rather than blindly preferring the chondrocyte subtype panel.
+
+    Returns (panel_name, rationale_str).
+    """
+    has_chondro = hasattr(profile_module, "chondrocyte_markers")
+    has_broad = hasattr(profile_module, "celltype_broad")
+    if not has_chondro:
+        return ("celltype_broad" if has_broad else "", "only celltype_broad available")
+    if not has_broad:
+        return ("chondrocyte_markers", "only chondrocyte_markers available")
+
+    chondro_panel: dict[str, list[str]] = profile_module.chondrocyte_markers
+    broad_panel: dict[str, list[str]] = profile_module.celltype_broad
+    chondro_genes = {g.upper() for genes in chondro_panel.values() for g in genes}
+    broad_genes = {g.upper() for genes in broad_panel.values() for g in genes}
+
+    # Look up per-cluster top markers via rank_genes_groups on the chosen res.
+    # Use scanpy's existing facility; if any of the inputs aren't ready we
+    # fall back to the chondrocyte-first preference (current default).
+    res_key = f"leiden_res_{chosen_res:g}".replace(".", "_")
+    if res_key not in integrated_adata.obs.columns:
+        return ("chondrocyte_markers", "default (no leiden col for chosen res)")
+
+    try:
+        import scanpy as sc
+
+        rank_key = f"rank_panel_pick_{res_key}"
+        if rank_key not in integrated_adata.uns:
+            sc.tl.rank_genes_groups(
+                integrated_adata,
+                groupby=res_key,
+                method="wilcoxon",
+                use_raw=integrated_adata.raw is not None,
+                pts=False,
+                key_added=rank_key,
+            )
+        rg = integrated_adata.uns[rank_key]
+        names = rg["names"]
+        cluster_names = list(names.dtype.names)
+    except Exception:
+        return ("chondrocyte_markers", "default (rank_genes_groups failed)")
+
+    n_clusters = len(cluster_names)
+    if n_clusters == 0:
+        return ("chondrocyte_markers", "default (no clusters)")
+
+    n_broad_only = 0
+    for c in cluster_names:
+        top = [str(g).upper() for g in names[c][:30]]
+        broad_hit = any(g in broad_genes for g in top)
+        chondro_hit = any(g in chondro_genes for g in top)
+        if broad_hit and not chondro_hit:
+            n_broad_only += 1
+
+    frac_broad = n_broad_only / n_clusters
+    if frac_broad > 0.5:
+        return (
+            "celltype_broad",
+            f"{n_broad_only}/{n_clusters} clusters ({frac_broad:.0%}) have celltype_broad hits "
+            "without chondrocyte_markers hits — auto-picked celltype_broad",
+        )
+    return (
+        "chondrocyte_markers",
+        "fine-subtype panel preferred (chondrocyte hits dominate or are tied)",
+    )
+
+
+def _shrink_h5ad(adata: Any) -> None:
+    """
+    In-place: shrink the integrated h5ad before writing.
+
+    Cast `.X` to float32 (from the float64 that scale() produces) to halve
+    on-disk size; if already sparse, leave it alone.
+    """
+    try:
+        import scipy.sparse as sp
+    except ImportError:
+        sp = None  # type: ignore[assignment]
+    X = adata.X
+    if sp is not None and sp.issparse(X):
+        # Sparse already-compact; convert dtype only if needed.
+        if X.dtype != np.float32:
+            adata.X = X.astype(np.float32)
+        return
+    if hasattr(X, "dtype") and X.dtype != np.float32:
+        adata.X = X.astype(np.float32, copy=False)
+
+
+def _shrink_h5ad_for_annotate(adata: Any) -> Any:
+    """
+    Return a copy of `adata` whose `.X` is the log-normalized matrix
+    (from `.raw`) instead of the dense scaled float64 matrix that
+    integrate produces. The annotated h5ad is the user-facing artifact;
+    they want the log-normalized matrix downstream, not the scaled one.
+
+    If `.raw` isn't set, fall back to shrinking dtype only.
+    """
+    if adata.raw is not None:
+        try:
+            new = adata.raw.to_adata()
+            # Carry over obs / obsm / obsp / uns from the integrated adata
+            # so cluster columns, UMAP, neighbors stay attached.
+            for col in adata.obs.columns:
+                if col not in new.obs.columns:
+                    new.obs[col] = adata.obs[col].values
+            for k, v in adata.obsm.items():
+                new.obsm[k] = v
+            for k, v in adata.obsp.items():
+                new.obsp[k] = v
+            for k, v in adata.uns.items():
+                new.uns[k] = v
+            _shrink_h5ad(new)
+            return new
+        except Exception:
+            pass
+    _shrink_h5ad(adata)
+    return adata
+
+
+# Marker file lives in the per-user cache dir; first-run hint logic.
+_INSTALL_MARKER_PATH = Path.home() / ".cache" / "scellrun" / "installed.touch"
+
+
+def first_run_hint() -> str | None:
+    """
+    Return a one-line hint to print on the first invocation of `scellrun`
+    in this user's environment. Returns None on subsequent invocations.
+
+    The hint surfaces install heaviness so a non-engineer PI doesn't think
+    the install hung. The marker file is `~/.cache/scellrun/installed.touch`
+    — once present, the hint goes silent for that user.
+    """
+    try:
+        if _INSTALL_MARKER_PATH.exists():
+            return None
+        _INSTALL_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _INSTALL_MARKER_PATH.write_text(
+            "scellrun first-run marker; safe to delete to re-trigger the heaviness hint\n",
+            encoding="utf-8",
+        )
+        return (
+            "scellrun's deps include scanpy + scrublet + harmonypy + leidenalg; "
+            "first install ~3-5 min."
+        )
+    except OSError:
+        # Read-only home / permission issue: skip the hint silently.
+        return None
 
 
 def run_analyze(
@@ -129,11 +349,13 @@ def run_analyze(
     force: bool = False,
     max_genes: int | None = None,
     method: str = "harmony",
+    method_user_supplied: bool = False,
     regress_cell_cycle: bool = False,
     use_pubmed: bool = False,
     write_h5ad: bool = True,
     auto_fix: bool = False,
     on_progress: Any = None,
+    attempt_id: str | None = None,
 ) -> AnalyzeResult:
     """
     Run the full QC → integrate → markers → annotate → report pipeline.
@@ -162,6 +384,9 @@ def run_analyze(
     def _say(msg: str) -> None:
         if on_progress is not None:
             on_progress(msg)
+
+    if attempt_id is None:
+        attempt_id = uuid.uuid4().hex
 
     if run_dir is None:
         run_dir = default_run_dir()
@@ -198,13 +423,43 @@ def run_analyze(
             "or run the per-stage commands and skip annotate."
         )
 
+    # Issue #001: when the default --method is harmony but the input has no
+    # sample/batch column to integrate over, downgrade to "none" rather
+    # than failing 1m+ into the run. Only auto-downgrade when the caller
+    # didn't explicitly pass --method.
+    if method == "harmony" and not method_user_supplied:
+        try:
+            quick = ad.read_h5ad(h5ad, backed="r")
+            obs_cols = list(quick.obs.columns)
+            quick.file.close()
+        except Exception:
+            obs_cols = []
+        sample_candidates = [
+            c for c in ("orig.ident", "sample", "batch", "donor") if c in obs_cols
+        ]
+        if not sample_candidates:
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="method_downgrade",
+                    value="none",
+                    default="harmony",
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        "no sample/batch column (orig.ident/sample/batch/donor) in obs — "
+                        "single-sample input; auto-downgraded --method from harmony to none. "
+                        "Pass --method harmony explicitly to force the original behavior."
+                    ),
+                ),
+            )
+            method = "none"
+
     stages_completed: list[str] = []
 
     # ---- Stage 1: QC -------------------------------------------------------
-    try:
-        qc_out = stage_dir(run_dir, "qc", force=force)
-    except StageOutputExists as e:
-        raise StageFailure("qc", e) from None
+    qc_out = _resolve_stage_dir(run_dir, "qc", force=force, attempt_id=attempt_id)
 
     base_thresholds = profile_module.scrna_qc
     overrides: dict[str, Any] = {"species": species}
@@ -222,6 +477,13 @@ def run_analyze(
             run_dir=run_dir,
             profile=profile,
             user_thresholds_overrides=user_overrides_for_log,
+            profile_applied_thresholds=base_thresholds,
+            profile_user_supplied=profile != "default",
+            assay_user_supplied=False,
+            species_user_supplied=species != "human",
+            lang_user_supplied=lang != "en",
+            flag_doublets_user_supplied=False,
+            attempt_id=attempt_id,
             lang=lang,
         )
         qc_artifacts = write_qc_artifacts(
@@ -231,10 +493,31 @@ def run_analyze(
         raise StageFailure("qc", e) from e
 
     # v0.8 auto-fix: if QC self-check fired with an actionable fix, re-run
-    # the QC stage once with the relaxed threshold applied. Retry capped at
-    # 1 to avoid loops; if the second pass-rate still fails, log and continue.
+    # the QC stage once with the relaxed threshold applied. Cap = 1 retry.
+    # v0.9.1: log every fired finding (not just the one we acted on), and
+    # preserve the failed-first-pass dir at NN_qc.failed-N/ so the user
+    # can compare original vs retry artifacts.
     if auto_fix and qc_result.findings:
+        all_codes = _all_finding_codes(qc_result.findings)
         applied = _pick_first_actionable(qc_result.findings)
+        skipped = [c for c in all_codes if applied is None or c != all_codes[0]]
+        if skipped:
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="qc.skipped_findings",
+                    value=skipped,
+                    default=None,
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        "self-check fired multiple findings; --auto-fix only acts on "
+                        "the first actionable one. The remaining codes are still in "
+                        "the trigger/suggest rows above for the user to review."
+                    ),
+                ),
+            )
         if applied is not None:
             new_overrides = dict(overrides)
             new_overrides.update(applied)
@@ -250,15 +533,37 @@ def run_analyze(
                     value=_summarize_fix_dict(applied),
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
+                    fix_payload=dict(applied),
                     rationale=(
                         f"--auto-fix on; QC self-check suggestion {applied} applied; "
-                        "re-running stage once"
+                        "re-running stage once. Failed first-pass artifacts preserved at "
+                        "01_qc.failed-1/."
                     ),
                 ),
             )
             _say(f"[1/5] qc: --auto-fix applied {applied}; re-running QC")
+            failed_dir = _move_to_failed(run_dir, "qc")
+            if failed_dir is not None:
+                record(
+                    run_dir,
+                    Decision(
+                        stage="analyze",
+                        key="auto_fix.qc.failed_first_pass",
+                        value=failed_dir.name,
+                        default=None,
+                        source="auto",
+                        attempt_id=attempt_id,
+                        rationale=(
+                            "preserved the failed first-pass QC artifacts so the user "
+                            "can diff original vs retry"
+                        ),
+                    ),
+                )
             try:
-                qc_out = stage_dir(run_dir, "qc", force=True)
+                qc_out = _resolve_stage_dir(
+                    run_dir, "qc", force=True, attempt_id=attempt_id
+                )
                 adata = ad.read_h5ad(h5ad)
                 qc_result = run_qc(
                     adata,
@@ -267,6 +572,13 @@ def run_analyze(
                     run_dir=run_dir,
                     profile=profile,
                     user_thresholds_overrides=user_overrides_for_log,
+                    profile_applied_thresholds=base_thresholds,
+                    profile_user_supplied=profile != "default",
+                    assay_user_supplied=False,
+                    species_user_supplied=species != "human",
+                    lang_user_supplied=lang != "en",
+                    flag_doublets_user_supplied=False,
+                    attempt_id=attempt_id,
                     lang=lang,
                 )
                 qc_artifacts = write_qc_artifacts(
@@ -283,9 +595,16 @@ def run_analyze(
                     value=f"{new_pct:.1f}%",
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
                     rationale=(
                         f"after auto-fix retry, QC pass-rate is {new_pct:.1f}% "
-                        f"({qc_result.n_cells_pass}/{qc_result.n_cells_in})"
+                        f"({qc_result.n_cells_pass}/{qc_result.n_cells_in}); "
+                        + (
+                            "retry rescued the stage"
+                            if new_pct >= 30.0
+                            else "retry did not improve to a passing rate; "
+                            "review per_cell_metrics.csv before continuing"
+                        )
                     ),
                 ),
             )
@@ -301,6 +620,7 @@ def run_analyze(
             "thresholds": qc_thresholds,
             "force": force,
             "lang": lang,
+            "attempt_id": attempt_id,
         },
     )
     qc_pct = 100.0 * qc_result.n_cells_pass / max(qc_result.n_cells_in, 1)
@@ -313,10 +633,9 @@ def run_analyze(
     qc_h5ad_path = qc_artifacts["qc_h5ad"]
 
     # ---- Stage 2: integrate ------------------------------------------------
-    try:
-        integ_out = stage_dir(run_dir, "integrate", force=force)
-    except StageOutputExists as e:
-        raise StageFailure("integrate", e) from None
+    integ_out = _resolve_stage_dir(
+        run_dir, "integrate", force=force, attempt_id=attempt_id
+    )
 
     integrate_res_tuple: tuple[float, ...] = res_tuple
     integrate_regress_cc: bool = regress_cell_cycle
@@ -333,9 +652,11 @@ def run_analyze(
         integ_result, integrated = run_integrate(
             qc_adata,
             method=method,
+            method_user_supplied=method_user_supplied,
             n_pcs=30,
             resolutions=integrate_res_tuple,
             regress_cell_cycle=integrate_regress_cc,
+            regress_cell_cycle_user_supplied=regress_cell_cycle,
             species=species,
             drop_qc_fail=True,
             use_ai=use_ai,
@@ -344,7 +665,10 @@ def run_analyze(
             run_dir=run_dir,
             sample_key_user_supplied=False,
             resolutions_source=resolutions_source,
+            attempt_id=attempt_id,
         )
+        # Issue #006: shrink the integrated h5ad before writing.
+        _shrink_h5ad(integrated)
         integ_artifacts = write_integrate_artifacts(
             integ_result, integrated, integ_out, write_h5ad=True, lang=lang
         )
@@ -354,7 +678,26 @@ def run_analyze(
     # v0.8 auto-fix: if integrate self-check fired with an actionable fix,
     # re-run the integrate stage once with the fix applied. Cap = 1 retry.
     if auto_fix and integ_result.findings:
+        all_codes = _all_finding_codes(integ_result.findings)
         applied = _pick_first_actionable(integ_result.findings)
+        skipped = [c for c in all_codes if applied is None or c != all_codes[0]]
+        if skipped:
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="integrate.skipped_findings",
+                    value=skipped,
+                    default=None,
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        "self-check fired multiple findings; --auto-fix only acts on "
+                        "the first actionable one. The remaining codes are in the "
+                        "trigger/suggest rows above for the user to review."
+                    ),
+                ),
+            )
         if applied is not None:
             if "resolutions" in applied and applied["resolutions"] == "aio":
                 integrate_res_tuple = AIO_FULL_RESOLUTIONS
@@ -368,15 +711,37 @@ def run_analyze(
                     value=_summarize_fix_dict(applied),
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
+                    fix_payload=dict(applied),
                     rationale=(
                         f"--auto-fix on; integrate self-check suggestion {applied} applied; "
-                        "re-running stage once"
+                        "re-running stage once. Failed first-pass artifacts preserved at "
+                        "02_integrate.failed-1/."
                     ),
                 ),
             )
             _say(f"[2/5] integrate: --auto-fix applied {applied}; re-running integrate")
+            failed_dir = _move_to_failed(run_dir, "integrate")
+            if failed_dir is not None:
+                record(
+                    run_dir,
+                    Decision(
+                        stage="analyze",
+                        key="auto_fix.integrate.failed_first_pass",
+                        value=failed_dir.name,
+                        default=None,
+                        source="auto",
+                        attempt_id=attempt_id,
+                        rationale=(
+                            "preserved the failed first-pass integrate artifacts "
+                            "so the user can diff original vs retry"
+                        ),
+                    ),
+                )
             try:
-                integ_out = stage_dir(run_dir, "integrate", force=True)
+                integ_out = _resolve_stage_dir(
+                    run_dir, "integrate", force=True, attempt_id=attempt_id
+                )
                 qc_adata = ad.read_h5ad(qc_h5ad_path)
                 resolutions_source = (
                     "aio"
@@ -390,9 +755,11 @@ def run_analyze(
                 integ_result, integrated = run_integrate(
                     qc_adata,
                     method=method,
+                    method_user_supplied=method_user_supplied,
                     n_pcs=30,
                     resolutions=integrate_res_tuple,
                     regress_cell_cycle=integrate_regress_cc,
+                    regress_cell_cycle_user_supplied=regress_cell_cycle,
                     species=species,
                     drop_qc_fail=True,
                     use_ai=use_ai,
@@ -401,12 +768,22 @@ def run_analyze(
                     run_dir=run_dir,
                     sample_key_user_supplied=False,
                     resolutions_source=resolutions_source,
+                    attempt_id=attempt_id,
                 )
+                _shrink_h5ad(integrated)
                 integ_artifacts = write_integrate_artifacts(
                     integ_result, integrated, integ_out, write_h5ad=True, lang=lang
                 )
             except Exception as e:
                 raise StageFailure("integrate", e) from e
+            outcome_text = (
+                "retry rescued the stage"
+                if (
+                    integ_result.cluster_counts
+                    and max(integ_result.cluster_counts.values()) > 2
+                )
+                else "retry did not improve cluster counts; review the cluster sweep"
+            )
             record(
                 run_dir,
                 Decision(
@@ -415,9 +792,10 @@ def run_analyze(
                     value=str(dict(integ_result.cluster_counts)),
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
                     rationale=(
                         "after auto-fix retry, cluster counts per resolution "
-                        f"{dict(integ_result.cluster_counts)}"
+                        f"{dict(integ_result.cluster_counts)} — {outcome_text}"
                     ),
                 ),
             )
@@ -439,6 +817,7 @@ def run_analyze(
             "use_ai": use_ai,
             "tissue": tissue,
             "lang": lang,
+            "attempt_id": attempt_id,
         },
     )
     integ_summary = (
@@ -451,12 +830,9 @@ def run_analyze(
 
     # Decide which resolution to feed annotate. Prefer integrate's quality;
     # if AI gave a recommendation and it's parseable, take that.
-    chosen_res = _pick_best_resolution(integ_result.quality)
+    chosen_res, criterion = _pick_best_resolution(integ_result.quality)
     chosen_res_source = "auto"
-    chosen_res_rationale = (
-        "largest n_clusters among non-fragmented resolutions "
-        "(<=1 singleton, >=2 clusters); ties broken by smallest resolution"
-    )
+    chosen_res_rationale = criterion
     if integ_result.quality and chosen_res in integ_result.quality:
         m = integ_result.quality[chosen_res]
         chosen_res_rationale += (
@@ -478,6 +854,9 @@ def run_analyze(
         except (TypeError, ValueError):
             pass
 
+    # A2: this decision is never `source="user"` regardless of whether the
+    # value happens to differ from a hard-coded default. Use Decision
+    # directly with explicit `source` so the AI branch can override it.
     record(
         run_dir,
         Decision(
@@ -486,19 +865,21 @@ def run_analyze(
             value=chosen_res,
             default=None,
             source=chosen_res_source,
+            attempt_id=attempt_id,
             rationale=chosen_res_rationale,
         ),
     )
 
     # ---- Stage 3: markers --------------------------------------------------
-    try:
-        markers_out = stage_dir(run_dir, "markers", force=force)
-    except StageOutputExists as e:
-        raise StageFailure("markers", e) from None
+    markers_out = _resolve_stage_dir(
+        run_dir, "markers", force=force, attempt_id=attempt_id
+    )
 
     try:
         markers_adata = ad.read_h5ad(integrated_h5ad_path)
-        markers_result, per_res_df = run_markers(markers_adata, run_dir=run_dir)
+        markers_result, per_res_df = run_markers(
+            markers_adata, run_dir=run_dir, attempt_id=attempt_id
+        )
         write_markers_artifacts(
             markers_result, per_res_df, markers_out, lang=lang
         )
@@ -517,6 +898,7 @@ def run_analyze(
             "only_positive": markers_result.only_positive,
             "top_n": markers_result.top_n,
             "lang": lang,
+            "attempt_id": attempt_id,
         },
     )
     n_markers_total = sum(markers_result.n_markers_per_resolution.values())
@@ -528,10 +910,9 @@ def run_analyze(
     stages_completed.append("markers")
 
     # ---- Stage 4: annotate -------------------------------------------------
-    try:
-        annot_out = stage_dir(run_dir, "annotate", force=force)
-    except StageOutputExists as e:
-        raise StageFailure("annotate", e) from None
+    annot_out = _resolve_stage_dir(
+        run_dir, "annotate", force=force, attempt_id=attempt_id
+    )
 
     # If chosen_res is not actually in the integrated h5ad, fall back to 0.5
     # (or the first available resolution).
@@ -542,7 +923,34 @@ def run_analyze(
         elif available:
             chosen_res = available[0]
 
+    # Issue #003 part 2: when the profile defines both panels, peek at the
+    # data's top markers to decide which panel to use, instead of always
+    # preferring chondrocyte_markers. Falls back to the legacy preference
+    # if the data doesn't make the choice clear.
     annot_panel_name: str | None = None
+    try:
+        peek_adata = ad.read_h5ad(integrated_h5ad_path)
+        picked_panel, panel_pick_rationale = _autopick_panel_for_data(
+            profile_module, peek_adata, chosen_res
+        )
+        if picked_panel:
+            annot_panel_name = picked_panel
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="annotate.auto_panel",
+                    value=annot_panel_name,
+                    default=None,
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=panel_pick_rationale,
+                ),
+            )
+    except Exception:
+        # Auto-pick is best-effort; on failure fall through to annotate's
+        # built-in _select_panel which prefers chondrocyte_markers.
+        annot_panel_name = None
 
     try:
         annot_adata = ad.read_h5ad(integrated_h5ad_path)
@@ -556,7 +964,14 @@ def run_analyze(
             use_pubmed=use_pubmed,
             tissue=tissue,
             run_dir=run_dir,
+            profile_user_supplied=profile != "default",
+            resolution_user_supplied=False,  # orchestrator picked it
+            use_ai_user_supplied=False,
+            use_pubmed_user_supplied=use_pubmed,
+            tissue_user_supplied=tissue is not None,
+            attempt_id=attempt_id,
         )
+        annot_adata = _shrink_h5ad_for_annotate(annot_adata)
         write_annotate_artifacts(
             annot_result, annot_adata, annot_out, write_h5ad=write_h5ad, lang=lang
         )
@@ -566,7 +981,26 @@ def run_analyze(
     # v0.8 auto-fix: if annotate self-check fired with an actionable fix
     # (e.g. switch panel), re-run annotate once with the new panel.
     if auto_fix and annot_result.findings:
+        all_codes = _all_finding_codes(annot_result.findings)
         applied = _pick_first_actionable(annot_result.findings)
+        skipped = [c for c in all_codes if applied is None or c != all_codes[0]]
+        if skipped:
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="annotate.skipped_findings",
+                    value=skipped,
+                    default=None,
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        "self-check fired multiple findings; --auto-fix only acts on "
+                        "the first actionable one. The remaining codes are in the "
+                        "trigger/suggest rows above for the user to review."
+                    ),
+                ),
+            )
         if applied is not None and "panel_name" in applied:
             annot_panel_name = str(applied["panel_name"])
             record(
@@ -577,9 +1011,12 @@ def run_analyze(
                     value=_summarize_fix_dict(applied),
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
+                    fix_payload=dict(applied),
                     rationale=(
                         f"--auto-fix on; annotate self-check suggestion {applied} applied; "
-                        "re-running stage once"
+                        "re-running stage once. Failed first-pass artifacts preserved at "
+                        "04_annotate.failed-1/."
                     ),
                 ),
             )
@@ -587,8 +1024,27 @@ def run_analyze(
                 f"[4/5] annotate: --auto-fix applied {applied}; re-running annotate "
                 f"with panel={annot_panel_name}"
             )
+            failed_dir = _move_to_failed(run_dir, "annotate")
+            if failed_dir is not None:
+                record(
+                    run_dir,
+                    Decision(
+                        stage="analyze",
+                        key="auto_fix.annotate.failed_first_pass",
+                        value=failed_dir.name,
+                        default=None,
+                        source="auto",
+                        attempt_id=attempt_id,
+                        rationale=(
+                            "preserved the failed first-pass annotate artifacts "
+                            "so the user can diff original vs retry"
+                        ),
+                    ),
+                )
             try:
-                annot_out = stage_dir(run_dir, "annotate", force=True)
+                annot_out = _resolve_stage_dir(
+                    run_dir, "annotate", force=True, attempt_id=attempt_id
+                )
                 annot_adata = ad.read_h5ad(integrated_h5ad_path)
                 annot_result = run_annotate(
                     annot_adata,
@@ -600,7 +1056,14 @@ def run_analyze(
                     use_pubmed=use_pubmed,
                     tissue=tissue,
                     run_dir=run_dir,
+                    profile_user_supplied=profile != "default",
+                    resolution_user_supplied=False,
+                    use_ai_user_supplied=False,
+                    use_pubmed_user_supplied=use_pubmed,
+                    tissue_user_supplied=tissue is not None,
+                    attempt_id=attempt_id,
                 )
+                annot_adata = _shrink_h5ad_for_annotate(annot_adata)
                 write_annotate_artifacts(
                     annot_result, annot_adata, annot_out, write_h5ad=write_h5ad, lang=lang
                 )
@@ -614,6 +1077,7 @@ def run_analyze(
                     value=annot_result.panel_name,
                     default=None,
                     source="auto",
+                    attempt_id=attempt_id,
                     rationale=(
                         "after auto-fix retry, annotate ran with panel "
                         f"{annot_result.panel_name!r}"
@@ -634,6 +1098,7 @@ def run_analyze(
             "use_pubmed": use_pubmed,
             "tissue": tissue,
             "lang": lang,
+            "attempt_id": attempt_id,
         },
     )
     annotate_summary = (
@@ -644,10 +1109,9 @@ def run_analyze(
     stages_completed.append("annotate")
 
     # ---- Stage 5: report ---------------------------------------------------
-    try:
-        report_out = stage_dir(run_dir, "report", force=force)
-    except StageOutputExists as e:
-        raise StageFailure("report", e) from None
+    report_out = _resolve_stage_dir(
+        run_dir, "report", force=force, attempt_id=attempt_id
+    )
 
     try:
         report_artifacts = build_report(run_dir, report_out, lang=lang)
@@ -657,7 +1121,7 @@ def run_analyze(
     write_run_meta(
         run_dir,
         command="analyze:report",
-        params={"out_dir": report_out, "lang": lang},
+        params={"out_dir": report_out, "lang": lang, "attempt_id": attempt_id},
     )
     report_index = report_artifacts["index"]
     report_summary = f"[5/5] report: {report_index}"
@@ -673,4 +1137,64 @@ def run_analyze(
         annotate_summary=annotate_summary,
         report_index=report_index,
         chosen_resolution=chosen_res,
+        attempt_id=attempt_id,
     )
+
+
+def _resolve_stage_dir(
+    run_dir: Path,
+    stage: str,
+    *,
+    force: bool,
+    attempt_id: str,
+) -> Path:
+    """
+    Stage-dir resolution that handles auto-resume on incomplete prior runs.
+
+    Issue #010: if a previous run aborted mid-pipeline, the stage dir
+    exists but the stage hasn't completed (no `report.html` for stages
+    that produce one, or no `index.html` for the report stage). We
+    overwrite that incomplete dir without making the user pass --force.
+    A `<stage>.auto_resume` decision row records the implicit overwrite.
+
+    For complete prior runs (report.html present), behavior is unchanged:
+    StageOutputExists fires and the caller wraps it in StageFailure.
+    """
+    sub = run_dir / STAGE_DIRS[stage]
+    if not force and sub.exists():
+        sentinel = sub / ("index.html" if stage == "report" else "report.html")
+        if sub.exists() and not sentinel.exists():
+            # Incomplete prior run; auto-resume into this stage dir.
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key=f"{stage}.auto_resume",
+                    value=sub.name,
+                    default=None,
+                    source="auto",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        f"prior run left {sub.name}/ without a completed report; "
+                        "overwriting in place rather than erroring on StageOutputExists"
+                    ),
+                ),
+            )
+            try:
+                return stage_dir(run_dir, stage, force=True)
+            except StageOutputExists as e:
+                raise StageFailure(stage, e) from None
+    try:
+        return stage_dir(run_dir, stage, force=force)
+    except StageOutputExists as e:
+        raise StageFailure(stage, e) from None
+
+
+# Re-export for tests / callers that imported os from this module historically.
+__all__ = [
+    "AnalyzeResult",
+    "StageFailure",
+    "_pick_best_resolution",
+    "first_run_hint",
+    "run_analyze",
+]

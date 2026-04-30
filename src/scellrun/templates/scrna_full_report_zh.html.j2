@@ -28,6 +28,11 @@
   .badge-ai   { background: #efe4ff; color: #5a1f8a; }
   .stage-head { font-size: 1rem; margin: 1.2rem 0 .3rem; color: #333; font-weight: 600; }
   .summary-counts { color: #666; font-size: .9rem; margin-top: .2rem; }
+  .glance { background: #f8fbff; border-left: 3px solid #1f4e8a; padding: .8rem 1rem; margin: .6rem 0 1rem; }
+  .glance-row { margin: .25rem 0; font-size: .95rem; }
+  .glance-label { color: #555; min-width: 11rem; display: inline-block; }
+  .glance-trigger { color: #b34141; font-weight: 600; }
+  .glance ul { margin: .25rem 0 .25rem 1.2rem; padding: 0; }
 </style>
 </head>
 <body>
@@ -35,6 +40,58 @@
 <h1>scellrun — 完整流程报告</h1>
 
 <p style="color:#666;">运行目录：<code>{{ run_dir }}</code></p>
+
+<h2>一览</h2>
+<div class="glance">
+  <div class="glance-row">
+    <span class="glance-label">QC 通过率：</span>
+    {% if glance.qc_pass_rate_pct is not none %}
+      <strong>{{ "%.1f"|format(glance.qc_pass_rate_pct) }}%</strong>
+      {% if glance.qc_n_pass is not none and glance.qc_n_in is not none %}
+        （{{ glance.qc_n_pass }} / {{ glance.qc_n_in }} 个细胞）
+      {% endif %}
+    {% else %}
+      <em>暂无</em>
+    {% endif %}
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">整合方法：</span>
+    {% if glance.method %}<code>{{ glance.method }}</code>{% else %}<em>—</em>{% endif %}
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">注释 panel：</span>
+    {% if glance.panel %}<code>{{ glance.panel }}</code>{% else %}<em>—</em>{% endif %}
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">所选分辨率：</span>
+    {% if glance.chosen_resolution is not none %}
+      <code>{{ glance.chosen_resolution }}</code>
+      {% if glance.n_clusters is not none %}
+        — 共 <strong>{{ glance.n_clusters }}</strong> 个 cluster
+      {% endif %}
+    {% else %}
+      <em>—</em>
+    {% endif %}
+  </div>
+  {% if glance.top_celltypes %}
+  <div class="glance-row">
+    <span class="glance-label">主要细胞类型：</span>
+    <ul>
+      {% for ct in glance.top_celltypes %}
+        <li><code>{{ ct.label }}</code>——{{ ct.n_clusters }} 个 cluster</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if glance.self_check_codes %}
+  <div class="glance-row">
+    <span class="glance-label">自检告警：</span>
+    {% for code in glance.self_check_codes %}
+      <span class="glance-trigger">{{ code }}</span>{% if not loop.last %}，{% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
 
 <h2>决策摘要</h2>
 {% if decisions_by_stage %}

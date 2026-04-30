@@ -311,6 +311,12 @@ def run_annotate(
     pubmed_per_gene: int = DEFAULT_PUBMED_PER_GENE,
     pubmed_top_genes: int = 3,
     run_dir: Path | None = None,
+    profile_user_supplied: bool = False,
+    resolution_user_supplied: bool = True,
+    use_ai_user_supplied: bool = False,
+    use_pubmed_user_supplied: bool = False,
+    tissue_user_supplied: bool = False,
+    attempt_id: str = "",
 ) -> AnnotateResult:
     """
     Annotate every cluster at the given resolution.
@@ -392,20 +398,22 @@ def run_annotate(
     if run_dir is not None:
         profile_short = profile_module.__name__.split(".")[-1]
         decisions: list[Decision] = [
-            Decision(
+            Decision.from_choice(
                 stage="annotate",
                 key="profile",
                 value=profile_short,
                 default="default",
-                source="user" if profile_short != "default" else "auto",
+                is_user_override=profile_user_supplied,
+                attempt_id=attempt_id,
                 rationale="profile selects which marker panels are available for matching",
             ),
-            Decision(
+            Decision.from_choice(
                 stage="annotate",
                 key="panel",
                 value=panel_actual_name,
                 default=None,
-                source="user" if panel_name is not None else "auto",
+                is_user_override=panel_name is not None,
+                attempt_id=attempt_id,
                 rationale=(
                     f"--panel {panel_name!r} forced"
                     if panel_name is not None
@@ -416,35 +424,42 @@ def run_annotate(
                     )
                 ),
             ),
-            Decision(
+            # The annotate stage's `resolution` is only "user" when the
+            # user invoked `scellrun scrna annotate --resolution X` directly.
+            # When called from `analyze`, it's the orchestrator's pick
+            # (also recorded as analyze.chosen_resolution_for_annotate).
+            Decision.from_choice(
                 stage="annotate",
                 key="resolution",
                 value=resolution,
                 default=None,
-                source="user",
+                is_user_override=resolution_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"matching against leiden_res_{resolution:g} clusters; the orchestrator picks "
                     "this from integrate's quality table when called via `scellrun analyze`"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="annotate",
                 key="use_ai",
                 value=use_ai,
                 default=False,
-                source="user" if use_ai else "auto",
+                is_user_override=use_ai_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"AI second-opinion enabled (model={ai_model}); deterministic panel call still authoritative"
                     if use_ai
                     else "AI second-opinion off — deterministic panel match only"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="annotate",
                 key="use_pubmed",
                 value=use_pubmed,
                 default=False,
-                source="user" if use_pubmed else "auto",
+                is_user_override=use_pubmed_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"PubMed evidence column on; tissue={tissue!r}; up to "
                     f"{pubmed_per_gene} papers per top gene"
@@ -452,12 +467,13 @@ def run_annotate(
                     else "PubMed lookup off — turn on with --pubmed for the literature evidence column"
                 ),
             ),
-            Decision(
+            Decision.from_choice(
                 stage="annotate",
                 key="tissue",
                 value=tissue,
                 default=None,
-                source="user" if tissue else "auto",
+                is_user_override=tissue_user_supplied,
+                attempt_id=attempt_id,
                 rationale=(
                     f"tissue context {tissue!r} drives PubMed scoping and AI prompt"
                     if tissue
@@ -466,7 +482,7 @@ def run_annotate(
             ),
         ]
         record_many(run_dir, decisions)
-        record_findings(run_dir, findings)
+        record_findings(run_dir, findings, attempt_id=attempt_id)
 
     return AnnotateResult(
         resolution=resolution,

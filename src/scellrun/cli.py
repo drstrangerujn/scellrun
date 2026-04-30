@@ -157,6 +157,19 @@ def scrna_qc(
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
     user_overrides_for_log = {k: v for k, v in overrides.items() if k != "species"}
+    # Detect which CLI flags the caller actually supplied so the decision
+    # log can tag them as "user" vs "auto" without false positives. typer
+    # doesn't expose this directly; the cheap-and-correct approach is to
+    # scan sys.argv for the matching long flags.
+    import sys as _sys
+    _argv = " ".join(_sys.argv)
+    qc_flag_supplied = "--profile" in _argv or "-p" in _sys.argv
+    qc_assay_supplied = "--assay" in _argv
+    qc_species_supplied = "--species" in _argv
+    qc_lang_supplied = "--lang" in _argv
+    qc_doublets_supplied = (
+        "--flag-doublets" in _argv or "--no-flag-doublets" in _argv
+    )
     try:
         result = run_qc(
             adata,
@@ -166,6 +179,12 @@ def scrna_qc(
             run_dir=run_dir,
             profile=profile,
             user_thresholds_overrides=user_overrides_for_log,
+            profile_applied_thresholds=base_thresholds,
+            profile_user_supplied=qc_flag_supplied,
+            assay_user_supplied=qc_assay_supplied,
+            species_user_supplied=qc_species_supplied,
+            lang_user_supplied=qc_lang_supplied,
+            flag_doublets_user_supplied=qc_doublets_supplied,
             lang=lang,
         )
     except InvalidInputError as e:
@@ -322,14 +341,25 @@ def scrna_integrate(
     else:
         resolutions_source = "user"
 
+    import sys as _sys
+    _argv = " ".join(_sys.argv)
+    integ_method_supplied = "--method" in _argv
+    integ_n_pcs_supplied = "--n-pcs" in _argv
+    integ_cc_supplied = (
+        "--regress-cell-cycle" in _argv or "--no-regress-cell-cycle" in _argv
+    )
+
     try:
         result, integrated = run_integrate(
             adata,
             method=method,
+            method_user_supplied=integ_method_supplied,
             sample_key=sample_key,
             n_pcs=n_pcs,
+            n_pcs_user_supplied=integ_n_pcs_supplied,
             resolutions=res_tuple,
             regress_cell_cycle=regress_cell_cycle,
+            regress_cell_cycle_user_supplied=integ_cc_supplied,
             species=species,
             drop_qc_fail=drop_qc_fail,
             use_ai=use_ai,
@@ -451,6 +481,14 @@ def scrna_markers(
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
+    import sys as _sys
+    _argv = " ".join(_sys.argv)
+    markers_logfc_supplied = "--logfc-threshold" in _argv
+    markers_pct_supplied = "--pct-min" in _argv
+    markers_only_pos_supplied = (
+        "--only-positive" in _argv or "--all-direction" in _argv
+    )
+
     try:
         result, per_res_df = run_markers(
             adata,
@@ -460,6 +498,9 @@ def scrna_markers(
             only_positive=only_positive,
             top_n_per_cluster=top_n,
             run_dir=run_dir,
+            logfc_threshold_user_supplied=markers_logfc_supplied,
+            pct_min_user_supplied=markers_pct_supplied,
+            only_positive_user_supplied=markers_only_pos_supplied,
         )
     except ValueError as e:
         console.print(f"[red]error:[/red] {e}")
@@ -566,6 +607,12 @@ def scrna_annotate(
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
+    import sys as _sys
+    _argv = " ".join(_sys.argv)
+    annot_profile_supplied = "--profile" in _argv or "-p" in _sys.argv
+    annot_ai_supplied = "--ai" in _argv or "--no-ai" in _argv
+    annot_pubmed_supplied = "--pubmed" in _argv or "--no-pubmed" in _argv
+
     try:
         result = run_annotate(
             adata,
@@ -578,6 +625,11 @@ def scrna_annotate(
             tissue=tissue,
             top_n_markers=top_n,
             run_dir=run_dir,
+            profile_user_supplied=annot_profile_supplied,
+            resolution_user_supplied=True,  # CLI always exposes --resolution
+            use_ai_user_supplied=annot_ai_supplied,
+            use_pubmed_user_supplied=annot_pubmed_supplied,
+            tissue_user_supplied=tissue is not None,
         )
     except ValueError as e:
         console.print(f"[red]error:[/red] {e}")
@@ -635,7 +687,17 @@ def analyze_cmd(
     method: str = typer.Option("harmony", "--method", help="Integration method: harmony / none. (rpca/cca planned, currently raises NotImplementedError.)"),
     regress_cell_cycle: bool = typer.Option(False, "--regress-cell-cycle/--no-regress-cell-cycle", help="Score and regress out S/G2M cell-cycle effect during integrate."),
     use_pubmed: bool = typer.Option(False, "--pubmed/--no-pubmed", help="Annotate stage: fetch top PubMed papers per top marker."),
-    auto_fix: bool = typer.Option(False, "--auto-fix/--no-auto-fix", help="When a stage's self-check fires (low QC pass-rate, too few clusters, panel mismatch), apply the suggested fix and re-run that stage once. Default: off."),
+    auto_fix: bool = typer.Option(
+        False,
+        "--auto-fix/--no-auto-fix",
+        help=(
+            "Re-run a stage once (capped) if its self-check finds a fixable problem "
+            "(e.g. low QC pass-rate -> relax mt%, <=2 clusters -> wider sweep). Costs: "
+            "the failed first-pass artifacts are preserved at NN_stage.failed-1/, and "
+            "the retry runs the FULL stage again (integrate/annotate may be slow). "
+            "The retry may still fail to rescue the stage. Default: off."
+        ),
+    ),
 ) -> None:
     """
     One-shot pipeline: qc → integrate → markers → annotate → report.
@@ -654,9 +716,16 @@ def analyze_cmd(
     commands apply here.
     """
     import os
+    import sys
 
-    from scellrun.analyze import StageFailure, run_analyze
+    from scellrun.analyze import StageFailure, first_run_hint, run_analyze
     from scellrun.scrna.integrate import AIO_FULL_RESOLUTIONS, DEFAULT_RESOLUTIONS
+
+    method_user_supplied = any(a == "--method" or a.startswith("--method=") for a in sys.argv)
+
+    hint = first_run_hint()
+    if hint:
+        console.print(f"[dim]{hint}[/dim]")
 
     if species not in ("human", "mouse"):
         console.print(f"[red]error:[/red] --species must be 'human' or 'mouse', got {species!r}")
@@ -705,6 +774,7 @@ def analyze_cmd(
             force=force,
             max_genes=max_genes,
             method=method,
+            method_user_supplied=method_user_supplied,
             regress_cell_cycle=regress_cell_cycle,
             use_pubmed=use_pubmed,
             auto_fix=auto_fix,

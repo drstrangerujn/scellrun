@@ -54,6 +54,8 @@ class SelfCheckFinding:
 def record_findings(
     run_dir: Path | None,
     findings: list[SelfCheckFinding],
+    *,
+    attempt_id: str = "",
 ) -> None:
     """
     Append every finding to the decision log as two rows: trigger + suggestion.
@@ -61,6 +63,10 @@ def record_findings(
     Both rows carry `source="auto"` so the report's decision summary
     surfaces them under the stage that ran the check, ordered after the
     stage's regular decisions (since the check runs at the end).
+
+    The suggestion row carries the structured `fix` dict in the
+    Decision's `fix_payload` field so downstream tools can mechanically
+    apply the fix without having to parse the rationale prose.
     """
     if not findings:
         return
@@ -72,6 +78,7 @@ def record_findings(
             value=f.code,
             default=None,
             source="auto",
+            attempt_id=attempt_id,
             rationale=f.trigger,
         ))
         decisions.append(Decision(
@@ -80,7 +87,9 @@ def record_findings(
             value=_summarize_fix(f),
             default=None,
             source="auto",
+            attempt_id=attempt_id,
             rationale=f.suggestion,
+            fix_payload=dict(f.fix) if f.fix else None,
         ))
     record_many(run_dir, decisions)
 
@@ -123,7 +132,7 @@ def _summarize_fix(f: SelfCheckFinding) -> str:
 # QC self-check
 # ---------------------------------------------------------------------------
 
-QC_PASS_RATE_TRIGGER = 30.0  # below this %, fire the check
+QC_PASS_RATE_TRIGGER = 60.0  # below this %, fire the check (v0.9.1: was 30%)
 QC_PASS_RATE_TARGET = 60.0   # find the cheapest single threshold change to reach this %
 
 
@@ -136,7 +145,12 @@ def qc_self_check(
     """
     Walk QCResult.sensitivity for the smallest single threshold change that
     pushes pass-rate to QC_PASS_RATE_TARGET (60%) when the current rate is
-    below QC_PASS_RATE_TRIGGER (30%).
+    below QC_PASS_RATE_TRIGGER (60%, lowered from 30% in v0.9.1).
+
+    The 60% trigger ceiling catches the degraded-prep range (30-60% pass)
+    that the v0.8 30% trigger silently waved through. Real OA samples
+    routinely sit at 40-55% on default thresholds because joint tissue
+    is stress-prone; that's prime suggestion territory.
 
     Strategy: for each candidate knob (max_pct_mt, max_genes), find the
     smallest threshold in the sensitivity table where the marginal pass-rate
@@ -254,12 +268,16 @@ def integrate_self_check(
     quality: dict[float, dict[str, Any]] | None,
     resolutions_source: str,
     regress_cell_cycle_already_on: bool,
+    n_cells: int = 0,
 ) -> list[SelfCheckFinding]:
     """
     Two checks:
       1. If every resolution yields <= 2 clusters, suggest --resolutions aio
          (13-step wider sweep). Skip if the user is already on the aio sweep
-         — there's no wider one to suggest.
+         — there's no wider one to suggest. Skip when n_cells < 500: a small
+         sample with ≤2 populations may genuinely be biologically
+         homogeneous, and a wider sweep won't summon clusters that aren't
+         in the data.
       2. If the largest cluster at every resolution exceeds 50%, suggest
          --regress-cell-cycle, since the overrepresented cluster is often
          cycling cells. Skip if cell-cycle regression is already on.
@@ -268,18 +286,27 @@ def integrate_self_check(
 
     if cluster_counts:
         max_clusters = max(cluster_counts.values())
-        if max_clusters <= INTEGRATE_TOO_FEW_CLUSTERS and resolutions_source != "aio":
+        # v0.9.1 (B2): skip the suggestion on small datasets where ≤2 clusters
+        # may reflect actual biology (single compartment, low input). The
+        # 500-cell threshold mirrors the standard "you need this many to even
+        # reasonably cluster" rule of thumb in the scanpy tutorials.
+        small_homogeneous = (n_cells > 0 and n_cells < 500)
+        if (
+            max_clusters <= INTEGRATE_TOO_FEW_CLUSTERS
+            and resolutions_source != "aio"
+            and not small_homogeneous
+        ):
             findings.append(SelfCheckFinding(
                 stage="integrate",
                 code="integrate_too_few_clusters",
                 trigger=(
                     f"every requested resolution yielded <= {INTEGRATE_TOO_FEW_CLUSTERS} clusters "
-                    f"(max={max_clusters}); the data may need a wider resolution sweep "
-                    "or the integration may be over-correcting"
+                    f"(max={max_clusters})"
                 ),
                 suggestion=(
-                    "switch to --resolutions aio (13-step sweep from 0.01 to 2.0) — "
-                    "the default sweep tops out at 1.0 which can miss real substructure"
+                    "the resolution sweep tops out at 1.0 — if you expect more substructure, "
+                    "switch to --resolutions aio (13-step sweep from 0.01 to 2.0); otherwise "
+                    "this dataset may genuinely have ≤2 cell populations"
                 ),
                 fix={"resolutions": "aio"},
             ))

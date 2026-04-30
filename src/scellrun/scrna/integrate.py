@@ -234,7 +234,11 @@ def run_integrate(
     tissue: str | None = None,
     run_dir: Path | None = None,
     sample_key_user_supplied: bool = False,
+    method_user_supplied: bool = False,
+    n_pcs_user_supplied: bool = False,
+    regress_cell_cycle_user_supplied: bool = False,
     resolutions_source: str = "auto",
+    attempt_id: str = "",
 ) -> IntegrateResult:
     """
     Integrate one or more samples and run multi-resolution clustering.
@@ -390,19 +394,23 @@ def run_integrate(
         _record_integrate_decisions(
             run_dir=run_dir,
             method=method,
+            method_user_supplied=method_user_supplied,
             sample_key=sample_key,
             sample_key_user_supplied=sample_key_user_supplied,
             sample_key_was_autodetected=sample_key_was_autodetected,
             sample_key_candidates=candidates,
             n_pcs=n_pcs,
+            n_pcs_user_supplied=n_pcs_user_supplied,
             resolutions=tuple(resolutions),
             resolutions_source=resolutions_source,
             regress_cell_cycle=regress_cell_cycle,
+            regress_cell_cycle_user_supplied=regress_cell_cycle_user_supplied,
             cc_regressed=cc_regressed,
             cc_skip_reason=cc_skip_reason,
             ai_rec=ai_rec,
             ai_model=ai_model,
             use_ai=use_ai,
+            attempt_id=attempt_id,
         )
 
     # v0.8 self-check: too-few-clusters and dominant-cluster guards.
@@ -411,9 +419,10 @@ def run_integrate(
         quality=quality,
         resolutions_source=resolutions_source,
         regress_cell_cycle_already_on=cc_regressed,
+        n_cells=n_cells_used,
     )
     if run_dir is not None:
-        record_findings(run_dir, findings)
+        record_findings(run_dir, findings, attempt_id=attempt_id)
 
     return IntegrateResult(
         n_cells_in=n_cells_in,
@@ -434,29 +443,40 @@ def _record_integrate_decisions(
     *,
     run_dir: Path,
     method: str,
+    method_user_supplied: bool,
     sample_key: str | None,
     sample_key_user_supplied: bool,
     sample_key_was_autodetected: bool,
     sample_key_candidates: list[str],
     n_pcs: int,
+    n_pcs_user_supplied: bool,
     resolutions: tuple[float, ...],
     resolutions_source: str,
     regress_cell_cycle: bool,
+    regress_cell_cycle_user_supplied: bool,
     cc_regressed: bool,
     cc_skip_reason: str | None,
     ai_rec: dict[str, str] | None,
     ai_model: str,
     use_ai: bool,
+    attempt_id: str,
 ) -> None:
-    """Append all integrate-stage decisions to the run-dir's decision log."""
+    """Append all integrate-stage decisions to the run-dir's decision log.
+
+    Each decision uses an explicit `is_user_override` rather than diffing
+    value vs default, so e.g. when `--auto-fix` flips `regress_cell_cycle`
+    on internally we still tag it `source="auto"` (which it is — the
+    orchestrator decided, not the user).
+    """
     decisions: list[Decision] = []
 
-    decisions.append(Decision(
+    decisions.append(Decision.from_choice(
         stage="integrate",
         key="method",
         value=method,
         default="harmony",
-        source="user" if method != "harmony" else "auto",
+        is_user_override=method_user_supplied,
+        attempt_id=attempt_id,
         rationale=(
             "Harmony default — most common in the in-house PI workflow"
             if method == "harmony"
@@ -464,12 +484,13 @@ def _record_integrate_decisions(
         ),
     ))
 
-    decisions.append(Decision(
+    decisions.append(Decision.from_choice(
         stage="integrate",
         key="sample_key",
         value=sample_key,
         default=None,
-        source="user" if sample_key_user_supplied else "auto",
+        is_user_override=sample_key_user_supplied,
+        attempt_id=attempt_id,
         rationale=(
             f"--sample-key passed explicitly: {sample_key!r}"
             if sample_key_user_supplied
@@ -482,21 +503,23 @@ def _record_integrate_decisions(
         ),
     ))
 
-    decisions.append(Decision(
+    decisions.append(Decision.from_choice(
         stage="integrate",
         key="n_pcs",
         value=n_pcs,
         default=30,
-        source="user" if n_pcs != 30 else "auto",
+        is_user_override=n_pcs_user_supplied,
+        attempt_id=attempt_id,
         rationale="PCA components for neighbours/UMAP; 30 covers most tissue heterogeneity",
     ))
 
-    decisions.append(Decision(
+    decisions.append(Decision.from_choice(
         stage="integrate",
         key="resolutions",
         value=list(resolutions),
         default=list(DEFAULT_RESOLUTIONS),
-        source="user" if resolutions_source == "user" else "auto",
+        is_user_override=resolutions_source == "user",
+        attempt_id=attempt_id,
         rationale=(
             "Leiden multi-resolution sweep; "
             f"{len(resolutions)} values "
@@ -504,12 +527,13 @@ def _record_integrate_decisions(
         ),
     ))
 
-    decisions.append(Decision(
+    decisions.append(Decision.from_choice(
         stage="integrate",
         key="regress_cell_cycle",
         value=cc_regressed,
         default=False,
-        source="user" if regress_cell_cycle else "auto",
+        is_user_override=regress_cell_cycle_user_supplied,
+        attempt_id=attempt_id,
         rationale=(
             "S/G2M scored and CC_difference regressed (Tirosh genes)"
             if cc_regressed
@@ -529,6 +553,7 @@ def _record_integrate_decisions(
                 value=ai_rec.get("recommended_resolution"),
                 default=None,
                 source="ai",
+                attempt_id=attempt_id,
                 rationale=(
                     (ai_rec.get("rationale") or "")
                     + f" [model={ai_model}]"
@@ -541,6 +566,7 @@ def _record_integrate_decisions(
                 value=None,
                 default=None,
                 source="ai",
+                attempt_id=attempt_id,
                 rationale=(
                     "AI recommendation requested but unavailable — "
                     "missing ANTHROPIC_API_KEY, anthropic package, or API call failed"
