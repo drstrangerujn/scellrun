@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+.DS_Store
+.idea/
+.vscode/
+
+# data + outputs
+*.h5ad
+*.h5
+*.loom
+*.zarr/
+scellrun_out/
+*.png
+*.pdf
+!templates/**/*.png
+
+# claude
+.claude/settings.local.json
