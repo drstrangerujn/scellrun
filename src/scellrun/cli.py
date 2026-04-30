@@ -210,6 +210,145 @@ def scrna_qc(
         console.print(f"annotated h5ad: {artifacts['qc_h5ad']}")
 
 
+@scrna_app.command("integrate")
+def scrna_integrate(
+    h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input .h5ad (typically <run-dir>/01_qc/qc.h5ad)."),
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run root directory. Default: same as the qc.h5ad's parent run-dir."),
+    out: Path | None = typer.Option(None, "--out", "-o", help="Override output dir for this stage. By default, writes to <run-dir>/02_integrate/."),
+    method: str = typer.Option("harmony", "--method", help="Integration method: harmony / rpca / cca / none."),
+    sample_key: str | None = typer.Option(None, "--sample-key", help="obs column naming the sample/batch (default: auto-detect orig.ident / sample / batch / donor)."),
+    n_pcs: int = typer.Option(30, "--n-pcs", help="Number of PCA components."),
+    resolutions: str = typer.Option(
+        "0.1,0.3,0.5,0.8,1.0",
+        "--resolutions",
+        help="Comma-separated Leiden resolutions, or 'aio' for the AIO 13-step sweep.",
+    ),
+    regress_cell_cycle: bool = typer.Option(False, "--regress-cell-cycle/--no-regress-cell-cycle", help="Score and regress out S/G2M cell-cycle effect."),
+    species: str = typer.Option("human", "--species", help="'human' or 'mouse' (drives cell-cycle gene-list selection)."),
+    drop_qc_fail: bool = typer.Option(True, "--drop-qc-fail/--keep-qc-fail", help="Drop cells with scellrun_qc_pass=False before integration."),
+    write_h5ad: bool = typer.Option(True, "--write-h5ad/--no-write-h5ad", help="Write integrated.h5ad with PCA/UMAP/clusters attached."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing 02_integrate/ artifacts."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+) -> None:
+    """
+    Cross-sample integration with multi-resolution Leiden clustering.
+
+    Reads a QC'd h5ad, normalizes + scales, runs PCA, integrates (Harmony
+    by default) if a sample key is detected, then sweeps clustering at
+    several resolutions. Outputs integrated.h5ad + a UMAP grid + report.
+
+    Maps to AIO stage 4 + Rmd § 6-8.
+    """
+    import anndata as ad
+
+    from scellrun.runlayout import (
+        StageOutputExists,
+        default_run_dir,
+        stage_dir,
+        write_run_meta,
+    )
+    from scellrun.scrna.integrate import (
+        AIO_FULL_RESOLUTIONS,
+        DEFAULT_RESOLUTIONS,
+        run_integrate,
+        write_artifacts,
+    )
+
+    if method not in ("harmony", "rpca", "cca", "none"):
+        console.print(f"[red]error:[/red] --method must be one of harmony/rpca/cca/none, got {method!r}")
+        raise typer.Exit(2) from None
+    if species not in ("human", "mouse"):
+        console.print(f"[red]error:[/red] --species must be 'human' or 'mouse', got {species!r}")
+        raise typer.Exit(2) from None
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+
+    if resolutions == "aio":
+        res_tuple = AIO_FULL_RESOLUTIONS
+    elif resolutions == "default":
+        res_tuple = DEFAULT_RESOLUTIONS
+    else:
+        try:
+            res_tuple = tuple(float(x) for x in resolutions.split(",") if x.strip())
+        except ValueError:
+            console.print(f"[red]error:[/red] could not parse --resolutions {resolutions!r}")
+            raise typer.Exit(2) from None
+    if not res_tuple:
+        console.print("[red]error:[/red] --resolutions must list at least one value")
+        raise typer.Exit(2) from None
+
+    # Default run-dir: assume h5ad lives under <run-dir>/01_qc/, walk up two levels
+    if run_dir is None:
+        if h5ad.parent.name == "01_qc":
+            run_dir = h5ad.parent.parent
+        else:
+            run_dir = default_run_dir()
+
+    if out is not None:
+        out_dir = out
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            out_dir = stage_dir(run_dir, "integrate", force=force)
+        except StageOutputExists as e:
+            console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(2) from None
+
+    console.print(
+        f"[bold]scellrun scrna integrate[/bold]  •  method=[cyan]{method}[/cyan]  "
+        f"species=[cyan]{species}[/cyan]"
+    )
+    console.print(f"run-dir: [dim]{run_dir}[/dim]")
+    console.print(f"out-dir: [dim]{out_dir}[/dim]")
+    console.print(f"reading [dim]{h5ad}[/dim]")
+
+    adata = ad.read_h5ad(h5ad)
+    console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+
+    result, integrated = run_integrate(
+        adata,
+        method=method,
+        sample_key=sample_key,
+        n_pcs=n_pcs,
+        resolutions=res_tuple,
+        regress_cell_cycle=regress_cell_cycle,
+        species=species,
+        drop_qc_fail=drop_qc_fail,
+    )
+
+    console.print(f"used [bold green]{result.n_cells_used:,}[/bold green] / {result.n_cells_in:,} cells")
+    if result.sample_key:
+        console.print(f"sample key: {result.sample_key} ({integrated.obs[result.sample_key].nunique()} levels)")
+    else:
+        console.print("sample key: [dim](none — single-batch run)[/dim]")
+    console.print(f"clusters per resolution: {dict(result.cluster_counts)}")
+
+    artifacts = write_artifacts(result, integrated, out_dir, write_h5ad=write_h5ad, lang=lang)
+    write_run_meta(
+        run_dir,
+        command="scrna integrate",
+        params={
+            "h5ad": h5ad,
+            "out_dir": out_dir,
+            "method": method,
+            "sample_key": result.sample_key,
+            "n_pcs": n_pcs,
+            "resolutions": list(res_tuple),
+            "regress_cell_cycle": regress_cell_cycle,
+            "species": species,
+            "drop_qc_fail": drop_qc_fail,
+            "force": force,
+            "lang": lang,
+        },
+    )
+
+    console.print(f"[bold]report:[/bold] [link=file://{artifacts['report'].resolve()}]{artifacts['report']}[/link]")
+    console.print(f"UMAP grid: {artifacts['umap_grid']}")
+    if "integrated_h5ad" in artifacts:
+        console.print(f"integrated h5ad: {artifacts['integrated_h5ad']}")
+
+
 @profiles_app.command("list")
 def profiles_list() -> None:
     """List available profiles."""

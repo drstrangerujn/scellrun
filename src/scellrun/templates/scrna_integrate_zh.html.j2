@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>scellrun — 单细胞集成报告</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #222; line-height: 1.7; }
+  h1 { font-size: 1.6rem; border-bottom: 2px solid #333; padding-bottom: .3rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  .kv { display: grid; grid-template-columns: 240px 1fr; gap: .25rem .8rem; margin: .5rem 0 1rem; }
+  .kv dt { color: #666; }
+  img.umap { max-width: 100%; height: auto; margin: .5rem 0 1.5rem; border: 1px solid #eee; padding: .5rem; }
+  .rationale { background: #fafaf6; border-left: 3px solid #c7b07a; padding: .6rem .9rem; margin: .6rem 0; font-size: .92rem; }
+  .rationale strong { color: #5a4710; }
+  footer { color: #888; font-size: .82rem; margin-top: 3rem; border-top: 1px solid #eee; padding-top: .7rem; }
+  code { background: #f0f0f0; padding: .05rem .3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>单细胞集成报告</h1>
+
+<h2>总览</h2>
+<dl class="kv">
+  <dt>输入细胞数</dt>             <dd>{{ "{:,}".format(result.n_cells_in) }}</dd>
+  <dt>实际使用（QC 通过）</dt>    <dd>{{ "{:,}".format(result.n_cells_used) }}</dd>
+  <dt>集成方法</dt>               <dd>{{ result.method }}</dd>
+  <dt>样本键</dt>                 <dd>{{ result.sample_key or "（无——单批次）" }}</dd>
+  <dt>PCA 主成分数</dt>           <dd>{{ result.n_pcs }}</dd>
+  <dt>是否回归细胞周期</dt>       <dd>{{ result.cc_regressed }}</dd>
+</dl>
+
+<h2>各分辨率下的聚类数</h2>
+<dl class="kv">
+{% for res, n in cluster_counts.items() %}
+  <dt>resolution = {{ res }}</dt>  <dd>{{ n }} 个 cluster</dd>
+{% endfor %}
+</dl>
+
+<h2>UMAP 网格</h2>
+<img class="umap" src="{{ umap_grid_filename }}" alt="UMAP（每个分辨率）">
+
+<div class="rationale">
+  <strong>怎么看这张图：</strong>同一个 UMAP 布局，按不同 resolution 下的 cluster 上色。
+  Resolution 越高，同一群细胞会被切得越细。生物学上一般从较低 resolution（0.3-0.5）开始，
+  挑那个"每个 cluster 都能用 top markers 解释清楚"的分辨率作为主要分析的依据。
+</div>
+
+{% if ratio_filename %}
+<h2>Cluster × 样本 列联表</h2>
+<p>
+  保存在同目录的 <code>{{ ratio_filename }}</code>。如果某个 cluster 几乎只有一个样本的细胞，
+  说明批次没完全融合——查那个 cluster 的 markers，必要时换 integration 方法或 sample 键。
+</p>
+{% endif %}
+
+<h2>下一步</h2>
+<p>
+  在 scanpy 里加载 <code>integrated.h5ad</code>。<code>obs['leiden_res_X']</code> 是每个 resolution 下的 cluster 标签。
+  v0.3 的 <code>scellrun scrna markers</code> 会针对每个 resolution 出 per-cluster 差异基因。
+</p>
+
+<footer>
+  本报告由 scellrun 生成。默认值反映的是临床+生信团队的实际工作惯例，遇到具体场景请按需覆盖。
+</footer>
+
+</body>
+</html>

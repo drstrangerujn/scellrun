@@ -44,6 +44,20 @@ SCT vs LogNormalize forking) don't carry over; the working *practice* does.
 
 ---
 
+## v0.2 ↔ AIO mapping (shipped)
+
+| AIO/Rmd knob (R)              | scellrun field (Python)             | Notes                                                |
+| ----------------------------- | ----------------------------------- | ---------------------------------------------------- |
+| `cc=T` (CellCycleScoring)     | `--regress-cell-cycle`              | Tirosh genes, regress out S - G2M difference.        |
+| `redu = "harmony"`            | `--method harmony`                  | Default. Falls back to PCA if no sample key.         |
+| `redu = "rpca"/"cca"`         | `--method rpca/cca`                 | Currently no-op + note in report (no stable scanpy port). |
+| `r = c(0.01, …, 2.0)`         | `--resolutions aio`                 | 13-step sweep available; default is shorter [0.1, 0.3, 0.5, 0.8, 1.0]. |
+| `di = 30` (PCs)               | `--n-pcs 30`                        | Same.                                                |
+| `sct = F` (no SCTransform)    | (default)                           | LogNormalize + scale; SCT not supported.             |
+| `subset(DF_hi.lo == "Singlet")` | `--drop-qc-fail`                  | Drop cells with `scellrun_qc_pass=False`. Same intent. |
+
+---
+
 ## v0.2 plan — `scellrun scrna integrate`
 
 Targets Rmd § 6-8 + AIO stage 4. Subcommand contract:
