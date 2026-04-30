@@ -57,6 +57,26 @@ class StageFailure(RuntimeError):
         self.original = original
 
 
+def _pick_first_actionable(findings: list[Any]) -> dict[str, Any] | None:
+    """
+    Walk a list of SelfCheckFinding and return the first non-empty `fix` dict.
+
+    Findings without a fix dict (the human-only suggestions) are skipped;
+    they're already in the decision log for the user to read but the
+    orchestrator can't act on them.
+    """
+    for f in findings:
+        fix = getattr(f, "fix", None) or {}
+        if fix:
+            return dict(fix)
+    return None
+
+
+def _summarize_fix_dict(fix: dict[str, Any]) -> str:
+    """Compact stringification of a fix dict for decision-log values."""
+    return ", ".join(f"{k}={v}" for k, v in fix.items())
+
+
 def _pick_best_resolution(
     quality: dict[float, dict[str, float | int]] | None,
     fallback: float = 0.5,
@@ -112,6 +132,7 @@ def run_analyze(
     regress_cell_cycle: bool = False,
     use_pubmed: bool = False,
     write_h5ad: bool = True,
+    auto_fix: bool = False,
     on_progress: Any = None,
 ) -> AnalyzeResult:
     """
@@ -209,6 +230,66 @@ def run_analyze(
     except Exception as e:
         raise StageFailure("qc", e) from e
 
+    # v0.8 auto-fix: if QC self-check fired with an actionable fix, re-run
+    # the QC stage once with the relaxed threshold applied. Retry capped at
+    # 1 to avoid loops; if the second pass-rate still fails, log and continue.
+    if auto_fix and qc_result.findings:
+        applied = _pick_first_actionable(qc_result.findings)
+        if applied is not None:
+            new_overrides = dict(overrides)
+            new_overrides.update(applied)
+            qc_thresholds = dataclasses.replace(base_thresholds, **new_overrides)
+            user_overrides_for_log = {
+                k: v for k, v in new_overrides.items() if k != "species"
+            }
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.qc.applied",
+                    value=_summarize_fix_dict(applied),
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        f"--auto-fix on; QC self-check suggestion {applied} applied; "
+                        "re-running stage once"
+                    ),
+                ),
+            )
+            _say(f"[1/5] qc: --auto-fix applied {applied}; re-running QC")
+            try:
+                qc_out = stage_dir(run_dir, "qc", force=True)
+                adata = ad.read_h5ad(h5ad)
+                qc_result = run_qc(
+                    adata,
+                    assay="scrna",
+                    thresholds=qc_thresholds,
+                    run_dir=run_dir,
+                    profile=profile,
+                    user_thresholds_overrides=user_overrides_for_log,
+                    lang=lang,
+                )
+                qc_artifacts = write_qc_artifacts(
+                    qc_result, adata, qc_out, write_h5ad=True, lang=lang
+                )
+            except Exception as e:
+                raise StageFailure("qc", e) from e
+            new_pct = 100.0 * qc_result.n_cells_pass / max(qc_result.n_cells_in, 1)
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.qc.outcome",
+                    value=f"{new_pct:.1f}%",
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        f"after auto-fix retry, QC pass-rate is {new_pct:.1f}% "
+                        f"({qc_result.n_cells_pass}/{qc_result.n_cells_in})"
+                    ),
+                ),
+            )
+
     write_run_meta(
         run_dir,
         command="analyze:qc",
@@ -237,19 +318,24 @@ def run_analyze(
     except StageOutputExists as e:
         raise StageFailure("integrate", e) from None
 
+    integrate_res_tuple: tuple[float, ...] = res_tuple
+    integrate_regress_cc: bool = regress_cell_cycle
+
     try:
         qc_adata = ad.read_h5ad(qc_h5ad_path)
         # The orchestrator passes resolutions through verbatim; mark them as
         # "user" if the caller specified anything other than the literal default.
-        resolutions_source = "user" if tuple(res_tuple) != DEFAULT_RESOLUTIONS else "auto"
-        if tuple(res_tuple) == AIO_FULL_RESOLUTIONS:
+        resolutions_source = (
+            "user" if tuple(integrate_res_tuple) != DEFAULT_RESOLUTIONS else "auto"
+        )
+        if tuple(integrate_res_tuple) == AIO_FULL_RESOLUTIONS:
             resolutions_source = "aio"
         integ_result, integrated = run_integrate(
             qc_adata,
             method=method,
             n_pcs=30,
-            resolutions=res_tuple,
-            regress_cell_cycle=regress_cell_cycle,
+            resolutions=integrate_res_tuple,
+            regress_cell_cycle=integrate_regress_cc,
             species=species,
             drop_qc_fail=True,
             use_ai=use_ai,
@@ -264,6 +350,79 @@ def run_analyze(
         )
     except Exception as e:
         raise StageFailure("integrate", e) from e
+
+    # v0.8 auto-fix: if integrate self-check fired with an actionable fix,
+    # re-run the integrate stage once with the fix applied. Cap = 1 retry.
+    if auto_fix and integ_result.findings:
+        applied = _pick_first_actionable(integ_result.findings)
+        if applied is not None:
+            if "resolutions" in applied and applied["resolutions"] == "aio":
+                integrate_res_tuple = AIO_FULL_RESOLUTIONS
+            if "regress_cell_cycle" in applied:
+                integrate_regress_cc = bool(applied["regress_cell_cycle"])
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.integrate.applied",
+                    value=_summarize_fix_dict(applied),
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        f"--auto-fix on; integrate self-check suggestion {applied} applied; "
+                        "re-running stage once"
+                    ),
+                ),
+            )
+            _say(f"[2/5] integrate: --auto-fix applied {applied}; re-running integrate")
+            try:
+                integ_out = stage_dir(run_dir, "integrate", force=True)
+                qc_adata = ad.read_h5ad(qc_h5ad_path)
+                resolutions_source = (
+                    "aio"
+                    if tuple(integrate_res_tuple) == AIO_FULL_RESOLUTIONS
+                    else (
+                        "user"
+                        if tuple(integrate_res_tuple) != DEFAULT_RESOLUTIONS
+                        else "auto"
+                    )
+                )
+                integ_result, integrated = run_integrate(
+                    qc_adata,
+                    method=method,
+                    n_pcs=30,
+                    resolutions=integrate_res_tuple,
+                    regress_cell_cycle=integrate_regress_cc,
+                    species=species,
+                    drop_qc_fail=True,
+                    use_ai=use_ai,
+                    ai_model=ai_model,
+                    tissue=tissue,
+                    run_dir=run_dir,
+                    sample_key_user_supplied=False,
+                    resolutions_source=resolutions_source,
+                )
+                integ_artifacts = write_integrate_artifacts(
+                    integ_result, integrated, integ_out, write_h5ad=True, lang=lang
+                )
+            except Exception as e:
+                raise StageFailure("integrate", e) from e
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.integrate.outcome",
+                    value=str(dict(integ_result.cluster_counts)),
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        "after auto-fix retry, cluster counts per resolution "
+                        f"{dict(integ_result.cluster_counts)}"
+                    ),
+                ),
+            )
+            res_tuple = integrate_res_tuple
+            regress_cell_cycle = integrate_regress_cc
 
     write_run_meta(
         run_dir,
@@ -383,12 +542,15 @@ def run_analyze(
         elif available:
             chosen_res = available[0]
 
+    annot_panel_name: str | None = None
+
     try:
         annot_adata = ad.read_h5ad(integrated_h5ad_path)
         annot_result = run_annotate(
             annot_adata,
             profile_module,
             resolution=chosen_res,
+            panel_name=annot_panel_name,
             use_ai=use_ai,
             ai_model=ai_model,
             use_pubmed=use_pubmed,
@@ -400,6 +562,64 @@ def run_analyze(
         )
     except Exception as e:
         raise StageFailure("annotate", e) from e
+
+    # v0.8 auto-fix: if annotate self-check fired with an actionable fix
+    # (e.g. switch panel), re-run annotate once with the new panel.
+    if auto_fix and annot_result.findings:
+        applied = _pick_first_actionable(annot_result.findings)
+        if applied is not None and "panel_name" in applied:
+            annot_panel_name = str(applied["panel_name"])
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.annotate.applied",
+                    value=_summarize_fix_dict(applied),
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        f"--auto-fix on; annotate self-check suggestion {applied} applied; "
+                        "re-running stage once"
+                    ),
+                ),
+            )
+            _say(
+                f"[4/5] annotate: --auto-fix applied {applied}; re-running annotate "
+                f"with panel={annot_panel_name}"
+            )
+            try:
+                annot_out = stage_dir(run_dir, "annotate", force=True)
+                annot_adata = ad.read_h5ad(integrated_h5ad_path)
+                annot_result = run_annotate(
+                    annot_adata,
+                    profile_module,
+                    resolution=chosen_res,
+                    panel_name=annot_panel_name,
+                    use_ai=use_ai,
+                    ai_model=ai_model,
+                    use_pubmed=use_pubmed,
+                    tissue=tissue,
+                    run_dir=run_dir,
+                )
+                write_annotate_artifacts(
+                    annot_result, annot_adata, annot_out, write_h5ad=write_h5ad, lang=lang
+                )
+            except Exception as e:
+                raise StageFailure("annotate", e) from e
+            record(
+                run_dir,
+                Decision(
+                    stage="analyze",
+                    key="auto_fix.annotate.outcome",
+                    value=annot_result.panel_name,
+                    default=None,
+                    source="auto",
+                    rationale=(
+                        "after auto-fix retry, annotate ran with panel "
+                        f"{annot_result.panel_name!r}"
+                    ),
+                ),
+            )
 
     write_run_meta(
         run_dir,

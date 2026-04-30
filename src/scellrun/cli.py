@@ -635,6 +635,7 @@ def analyze_cmd(
     method: str = typer.Option("harmony", "--method", help="Integration method: harmony / none. (rpca/cca planned, currently raises NotImplementedError.)"),
     regress_cell_cycle: bool = typer.Option(False, "--regress-cell-cycle/--no-regress-cell-cycle", help="Score and regress out S/G2M cell-cycle effect during integrate."),
     use_pubmed: bool = typer.Option(False, "--pubmed/--no-pubmed", help="Annotate stage: fetch top PubMed papers per top marker."),
+    auto_fix: bool = typer.Option(False, "--auto-fix/--no-auto-fix", help="When a stage's self-check fires (low QC pass-rate, too few clusters, panel mismatch), apply the suggested fix and re-run that stage once. Default: off."),
 ) -> None:
     """
     One-shot pipeline: qc → integrate → markers → annotate → report.
@@ -706,6 +707,7 @@ def analyze_cmd(
             method=method,
             regress_cell_cycle=regress_cell_cycle,
             use_pubmed=use_pubmed,
+            auto_fix=auto_fix,
             on_progress=lambda s: console.print(s),
         )
     except StageFailure as e:

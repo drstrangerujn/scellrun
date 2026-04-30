@@ -32,7 +32,7 @@ pct_counts_*) keep their canonical names.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anndata as ad
@@ -42,6 +42,7 @@ import scanpy as sc
 
 from scellrun.decisions import Decision, record_many
 from scellrun.defaults import SCRNA_QC, SNRNA_QC, ScrnaQCThresholds
+from scellrun.self_check import SelfCheckFinding, qc_self_check, record_findings
 
 
 @dataclass
@@ -60,6 +61,8 @@ class QCResult:
     flag_breakdown: dict[str, int]  # which threshold rejected how many cells
     top_flagged: pd.DataFrame  # up to 20 worst-offender cells with reasons
     sensitivity: dict[str, list[dict]]  # per-knob: [{threshold, n_pass, pct_pass}, ...]
+    findings: list[SelfCheckFinding] = field(default_factory=list)
+    """v0.8 self-check findings (low pass-rate etc.); empty when all looks fine."""
 
 
 class InvalidInputError(ValueError):
@@ -289,9 +292,23 @@ def run_qc(
             lang=lang,
         )
 
+    n_cells_pass = int(obs["scellrun_qc_pass"].sum())
+
+    # v0.8 self-check: pass-rate guardrail. Findings are recorded to the
+    # decision log (source="auto") and exposed on the result so the
+    # orchestrator can apply auto-fixes.
+    findings = qc_self_check(
+        n_cells_in=n_cells_in,
+        n_cells_pass=n_cells_pass,
+        sensitivity=sensitivity,
+        thresholds=thresholds,
+    )
+    if run_dir is not None:
+        record_findings(run_dir, findings)
+
     return QCResult(
         n_cells_in=n_cells_in,
-        n_cells_pass=int(obs["scellrun_qc_pass"].sum()),
+        n_cells_pass=n_cells_pass,
         n_genes_in=n_genes_in,
         n_genes_after_filter=n_genes_after_filter,
         pct_mt_median=float(np.median(obs["pct_counts_mt"])),
@@ -304,6 +321,7 @@ def run_qc(
         flag_breakdown=flag_breakdown,
         top_flagged=top_flagged,
         sensitivity=sensitivity,
+        findings=findings,
     )
 
 

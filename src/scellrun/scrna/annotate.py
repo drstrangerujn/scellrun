@@ -31,6 +31,7 @@ import anndata as ad
 import pandas as pd
 
 from scellrun.decisions import Decision, record_many
+from scellrun.self_check import SelfCheckFinding, annotate_self_check, record_findings
 
 DEFAULT_TOP_N_MARKERS = 30  # how many top markers per cluster to consider for matching
 DEFAULT_PUBMED_PER_GENE = 3
@@ -58,6 +59,8 @@ class AnnotateResult:
     used_ai: bool
     used_pubmed: bool
     tissue: str | None
+    findings: list[SelfCheckFinding] = field(default_factory=list)
+    """v0.8 self-check findings (panel ambiguity / tissue mismatch)."""
 
 
 def _resolution_keys(adata: ad.AnnData) -> dict[float, str]:
@@ -368,6 +371,13 @@ def run_annotate(
             adata.obs[cluster_col].map(label_map_ai).astype("category")
         )
 
+    # v0.8 self-check: panel-margin and panel-tissue-mismatch guards.
+    findings = annotate_self_check(
+        annotations=annotations,
+        panel_name=panel_actual_name,
+        profile_module=profile_module,
+    )
+
     if run_dir is not None:
         profile_short = profile_module.__name__.split(".")[-1]
         decisions: list[Decision] = [
@@ -445,6 +455,7 @@ def run_annotate(
             ),
         ]
         record_many(run_dir, decisions)
+        record_findings(run_dir, findings)
 
     return AnnotateResult(
         resolution=resolution,
@@ -453,6 +464,7 @@ def run_annotate(
         used_ai=use_ai,
         used_pubmed=use_pubmed,
         tissue=tissue,
+        findings=findings,
     )
 
 

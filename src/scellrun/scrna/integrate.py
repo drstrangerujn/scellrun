@@ -12,7 +12,7 @@ Mapped from R AIO stage 4 + Rmd § 6-8. Choices:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import anndata as ad
@@ -20,6 +20,7 @@ import pandas as pd
 import scanpy as sc
 
 from scellrun.decisions import Decision, record_many
+from scellrun.self_check import SelfCheckFinding, integrate_self_check, record_findings
 
 DEFAULT_RESOLUTIONS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.8, 1.0)
 AIO_FULL_RESOLUTIONS: tuple[float, ...] = (
@@ -60,6 +61,8 @@ class IntegrateResult:
     # value is {largest_pct, smallest_pct, n_singletons, mixing_entropy, ...}
     quality: dict[float, dict[str, float | int]] | None = None
     ai_recommendation: dict[str, str] | None = None  # {recommended_resolution, rationale}
+    findings: list[SelfCheckFinding] = field(default_factory=list)
+    """v0.8 self-check findings (too few clusters / dominant cluster)."""
 
 
 def _to_mouse_case(genes: tuple[str, ...]) -> tuple[str, ...]:
@@ -395,6 +398,16 @@ def run_integrate(
             use_ai=use_ai,
         )
 
+    # v0.8 self-check: too-few-clusters and dominant-cluster guards.
+    findings = integrate_self_check(
+        cluster_counts=cluster_counts,
+        quality=quality,
+        resolutions_source=resolutions_source,
+        regress_cell_cycle_already_on=cc_regressed,
+    )
+    if run_dir is not None:
+        record_findings(run_dir, findings)
+
     return IntegrateResult(
         n_cells_in=n_cells_in,
         n_cells_used=n_cells_used,
@@ -406,6 +419,7 @@ def run_integrate(
         cc_regressed=cc_regressed,
         quality=quality,
         ai_recommendation=ai_rec,
+        findings=findings,
     ), adata
 
 
