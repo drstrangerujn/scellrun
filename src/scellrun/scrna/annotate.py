@@ -30,6 +30,8 @@ from urllib.request import urlopen
 import anndata as ad
 import pandas as pd
 
+from scellrun.decisions import Decision, record_many
+
 DEFAULT_TOP_N_MARKERS = 30  # how many top markers per cluster to consider for matching
 DEFAULT_PUBMED_PER_GENE = 3
 PUBMED_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -294,6 +296,7 @@ def run_annotate(
     top_n_markers: int = DEFAULT_TOP_N_MARKERS,
     pubmed_per_gene: int = DEFAULT_PUBMED_PER_GENE,
     pubmed_top_genes: int = 3,
+    run_dir: Path | None = None,
 ) -> AnnotateResult:
     """
     Annotate every cluster at the given resolution.
@@ -364,6 +367,84 @@ def run_annotate(
         adata.obs["scellrun_celltype_ai"] = (
             adata.obs[cluster_col].map(label_map_ai).astype("category")
         )
+
+    if run_dir is not None:
+        profile_short = profile_module.__name__.split(".")[-1]
+        decisions: list[Decision] = [
+            Decision(
+                stage="annotate",
+                key="profile",
+                value=profile_short,
+                default="default",
+                source="user" if profile_short != "default" else "auto",
+                rationale="profile selects which marker panels are available for matching",
+            ),
+            Decision(
+                stage="annotate",
+                key="panel",
+                value=panel_actual_name,
+                default=None,
+                source="user" if panel_name is not None else "auto",
+                rationale=(
+                    f"--panel {panel_name!r} forced"
+                    if panel_name is not None
+                    else (
+                        "auto-picked chondrocyte_markers (fine subtype) — preferred when available"
+                        if panel_actual_name == "chondrocyte_markers"
+                        else f"auto-picked {panel_actual_name!r} — first panel the profile defines"
+                    )
+                ),
+            ),
+            Decision(
+                stage="annotate",
+                key="resolution",
+                value=resolution,
+                default=None,
+                source="user",
+                rationale=(
+                    f"matching against leiden_res_{resolution:g} clusters; the orchestrator picks "
+                    "this from integrate's quality table when called via `scellrun analyze`"
+                ),
+            ),
+            Decision(
+                stage="annotate",
+                key="use_ai",
+                value=use_ai,
+                default=False,
+                source="user" if use_ai else "auto",
+                rationale=(
+                    f"AI second-opinion enabled (model={ai_model}); deterministic panel call still authoritative"
+                    if use_ai
+                    else "AI second-opinion off — deterministic panel match only"
+                ),
+            ),
+            Decision(
+                stage="annotate",
+                key="use_pubmed",
+                value=use_pubmed,
+                default=False,
+                source="user" if use_pubmed else "auto",
+                rationale=(
+                    f"PubMed evidence column on; tissue={tissue!r}; up to "
+                    f"{pubmed_per_gene} papers per top gene"
+                    if use_pubmed
+                    else "PubMed lookup off — turn on with --pubmed for the literature evidence column"
+                ),
+            ),
+            Decision(
+                stage="annotate",
+                key="tissue",
+                value=tissue,
+                default=None,
+                source="user" if tissue else "auto",
+                rationale=(
+                    f"tissue context {tissue!r} drives PubMed scoping and AI prompt"
+                    if tissue
+                    else "no tissue context supplied; PubMed scoping and AI prompt run un-anchored"
+                ),
+            ),
+        ]
+        record_many(run_dir, decisions)
 
     return AnnotateResult(
         resolution=resolution,

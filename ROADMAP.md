@@ -25,7 +25,8 @@ SCT vs LogNormalize forking) don't carry over; the working *practice* does.
 | **v0.4** ✓ | `scellrun scrna annotate` | Two-tier annotation: deterministic panel match (overlap-fraction with profile's marker dict) + optional `--ai` LLM second opinion via Anthropic API + optional `--pubmed` evidence column. Reports both calls side-by-side; user makes the final pick. | Rmd § 9-10 |
 | **v0.5** ✓ | `scellrun report` + integrate quality scoring | Multi-stage HTML report aggregator (`05_report/index.html`) linking QC + integrate + markers + annotate with the three-tier provenance trail. Integrate also gains per-resolution quality metrics + cluster-size chart + optional `--ai` resolution recommender. Print-to-PDF for publication. | Rmd full structure |
 | **v0.6** ✓ | `scellrun analyze` | One-shot pipeline: qc → integrate → markers → annotate → report in a single command. New users do not have to know the stage layout. Stage-specific deep customization still goes through the per-stage commands. | PLAN.md v0.6 |
-| v0.7+   | additional profiles + assays | Bulk RNA-seq, metabolomics composite scoring, proteomics integration. Optional `scellrun ai *` namespace for LLM-assisted interpretation. | (PI cohort experience)                              |
+| **v0.7** ✓ | decision log + AI summary | Every non-trivial choice (profile, mt%, sample-key auto-detect, resolution pick, panel pick, AI calls) appended to `00_decisions.jsonl`; the report's first page renders them grouped by stage with rationale + AI badges. The user reads one screen and answers "why mt% 20?" / "why res 0.5?". | PLAN.md v0.7 |
+| v0.8+   | error self-heal + Streamlit web UI + distribution polish | v0.8 stage `self_check()` + actionable suggestions; v0.9 Streamlit web UI; v1.0 conda-forge + Docker + frozen API. Beyond v1.0: bulk RNA-seq, metabolomics composite scoring, proteomics integration. | PLAN.md v0.8 / v0.9 / v1.0 |
 
 ---
 

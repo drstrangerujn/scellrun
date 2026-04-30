@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from scellrun.decisions import Decision, record
 from scellrun.runlayout import (
     StageOutputExists,
     default_run_dir,
@@ -189,10 +190,19 @@ def run_analyze(
     if max_genes is not None:
         overrides["max_genes"] = max_genes
     qc_thresholds = dataclasses.replace(base_thresholds, **overrides)
+    user_overrides_for_log = {k: v for k, v in overrides.items() if k != "species"}
 
     try:
         adata = ad.read_h5ad(h5ad)
-        qc_result = run_qc(adata, assay="scrna", thresholds=qc_thresholds)
+        qc_result = run_qc(
+            adata,
+            assay="scrna",
+            thresholds=qc_thresholds,
+            run_dir=run_dir,
+            profile=profile,
+            user_thresholds_overrides=user_overrides_for_log,
+            lang=lang,
+        )
         qc_artifacts = write_qc_artifacts(
             qc_result, adata, qc_out, write_h5ad=True, lang=lang
         )
@@ -229,6 +239,11 @@ def run_analyze(
 
     try:
         qc_adata = ad.read_h5ad(qc_h5ad_path)
+        # The orchestrator passes resolutions through verbatim; mark them as
+        # "user" if the caller specified anything other than the literal default.
+        resolutions_source = "user" if tuple(res_tuple) != DEFAULT_RESOLUTIONS else "auto"
+        if tuple(res_tuple) == AIO_FULL_RESOLUTIONS:
+            resolutions_source = "aio"
         integ_result, integrated = run_integrate(
             qc_adata,
             method=method,
@@ -240,6 +255,9 @@ def run_analyze(
             use_ai=use_ai,
             ai_model=ai_model,
             tissue=tissue,
+            run_dir=run_dir,
+            sample_key_user_supplied=False,
+            resolutions_source=resolutions_source,
         )
         integ_artifacts = write_integrate_artifacts(
             integ_result, integrated, integ_out, write_h5ad=True, lang=lang
@@ -275,13 +293,43 @@ def run_analyze(
     # Decide which resolution to feed annotate. Prefer integrate's quality;
     # if AI gave a recommendation and it's parseable, take that.
     chosen_res = _pick_best_resolution(integ_result.quality)
+    chosen_res_source = "auto"
+    chosen_res_rationale = (
+        "largest n_clusters among non-fragmented resolutions "
+        "(<=1 singleton, >=2 clusters); ties broken by smallest resolution"
+    )
+    if integ_result.quality and chosen_res in integ_result.quality:
+        m = integ_result.quality[chosen_res]
+        chosen_res_rationale += (
+            f" — picked res={chosen_res:g}: n_clusters={int(m.get('n_clusters', 0))}, "
+            f"largest={float(m.get('largest_pct', 0.0)):.1f}%, "
+            f"smallest={float(m.get('smallest_pct', 0.0)):.1f}%, "
+            f"singletons={int(m.get('n_singletons', 0))}"
+        )
     if integ_result.ai_recommendation is not None:
         try:
             ai_res = float(integ_result.ai_recommendation.get("recommended_resolution", ""))
             if ai_res in res_tuple:
                 chosen_res = ai_res
+                chosen_res_source = "ai"
+                ai_why = integ_result.ai_recommendation.get("rationale") or ""
+                chosen_res_rationale = (
+                    f"AI recommendation overrode the deterministic pick — {ai_why}"
+                ).strip()
         except (TypeError, ValueError):
             pass
+
+    record(
+        run_dir,
+        Decision(
+            stage="analyze",
+            key="chosen_resolution_for_annotate",
+            value=chosen_res,
+            default=None,
+            source=chosen_res_source,
+            rationale=chosen_res_rationale,
+        ),
+    )
 
     # ---- Stage 3: markers --------------------------------------------------
     try:
@@ -291,7 +339,7 @@ def run_analyze(
 
     try:
         markers_adata = ad.read_h5ad(integrated_h5ad_path)
-        markers_result, per_res_df = run_markers(markers_adata)
+        markers_result, per_res_df = run_markers(markers_adata, run_dir=run_dir)
         write_markers_artifacts(
             markers_result, per_res_df, markers_out, lang=lang
         )
@@ -345,6 +393,7 @@ def run_analyze(
             ai_model=ai_model,
             use_pubmed=use_pubmed,
             tissue=tissue,
+            run_dir=run_dir,
         )
         write_annotate_artifacts(
             annot_result, annot_adata, annot_out, write_h5ad=write_h5ad, lang=lang

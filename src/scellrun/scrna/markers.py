@@ -17,6 +17,8 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 
+from scellrun.decisions import Decision, record_many
+
 DEFAULT_LOGFC = 1.0
 DEFAULT_PCT_MIN = 0.25
 DEFAULT_TOP_N_PER_CLUSTER = 10
@@ -57,6 +59,7 @@ def run_markers(
     pct_min: float = DEFAULT_PCT_MIN,
     only_positive: bool = True,
     top_n_per_cluster: int = DEFAULT_TOP_N_PER_CLUSTER,
+    run_dir: Path | None = None,
 ) -> tuple[MarkersResult, dict[float, pd.DataFrame]]:
     """
     Compute per-cluster markers at one or more clustering resolutions.
@@ -75,6 +78,7 @@ def run_markers(
             "did you forget to run `scellrun scrna integrate` first?"
         )
 
+    resolutions_user_supplied = resolutions is not None
     if resolutions is None:
         resolutions = tuple(sorted(res_to_key))
     else:
@@ -156,6 +160,57 @@ def run_markers(
         only_positive=only_positive,
         top_n=top_n_per_cluster,
     )
+
+    if run_dir is not None:
+        decisions: list[Decision] = [
+            Decision(
+                stage="markers",
+                key="resolutions",
+                value=list(resolutions),
+                default=None,
+                source="user" if resolutions_user_supplied else "auto",
+                rationale=(
+                    "user-supplied resolutions list"
+                    if resolutions_user_supplied
+                    else "auto-detected from leiden_res_* columns in the integrated h5ad"
+                ),
+            ),
+            Decision(
+                stage="markers",
+                key="logfc_threshold",
+                value=logfc_threshold,
+                default=DEFAULT_LOGFC,
+                source="user" if logfc_threshold != DEFAULT_LOGFC else "auto",
+                rationale=(
+                    f"|log2fc| >= {logfc_threshold} — Seurat in-house default; "
+                    "tightens to 1.0 to drop near-zero-effect markers"
+                ),
+            ),
+            Decision(
+                stage="markers",
+                key="pct_min",
+                value=pct_min,
+                default=DEFAULT_PCT_MIN,
+                source="user" if pct_min != DEFAULT_PCT_MIN else "auto",
+                rationale=(
+                    f"min fraction expressing >= {pct_min} — drops genes hit by dropout in the focal cluster"
+                ),
+            ),
+            Decision(
+                stage="markers",
+                key="only_positive",
+                value=only_positive,
+                default=True,
+                source="user" if not only_positive else "auto",
+                rationale=(
+                    "positive-only markers (cluster-up) — what FindAllMarkers ships by default"
+                    if only_positive
+                    else "both directions kept; user wants down-regulated markers too"
+                ),
+            ),
+        ]
+        record_many(run_dir, decisions)
+
     return result, per_res_df
 
 

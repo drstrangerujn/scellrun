@@ -19,6 +19,16 @@
   code { background: #f0f0f0; padding: .05rem .3rem; border-radius: 3px; font-size: .9em; }
   ul.artifacts { list-style: square; padding-left: 1.2rem; font-size: .9rem; }
   .provenance { background: #fafaf6; border-left: 3px solid #c7b07a; padding: .6rem .9rem; margin: .8rem 0 1.2rem; font-size: .92rem; color: #555; }
+  table.decisions { font-size: .88rem; width: 100%; border-collapse: collapse; margin-top: .4rem; }
+  table.decisions th, table.decisions td { border: 1px solid #e3e3e3; padding: .3rem .55rem; text-align: left; vertical-align: top; }
+  table.decisions th { background: #f6f6f6; font-weight: 600; }
+  table.decisions tr.user td { background: #fff8ef; }
+  .badge { display: inline-block; padding: .05rem .45rem; border-radius: .7rem; font-size: .72rem; font-weight: 600; letter-spacing: .02em; }
+  .badge-auto { background: #eef4ff; color: #1f4e8a; }
+  .badge-user { background: #fdf0d8; color: #8a5a1f; }
+  .badge-ai   { background: #efe4ff; color: #5a1f8a; }
+  .stage-head { font-size: 1rem; margin: 1.2rem 0 .3rem; color: #333; font-weight: 600; }
+  .summary-counts { color: #666; font-size: .9rem; margin-top: .2rem; }
 </style>
 </head>
 <body>
@@ -28,6 +38,41 @@
 <p style="color:#666;">
   Run directory: <code>{{ run_dir }}</code>
 </p>
+
+<h2>Decision summary</h2>
+{% if decisions_by_stage %}
+<p class="summary-counts">
+  {{ n_decisions_total }} decisions logged across {{ decisions_by_stage|length }} stage(s){% if n_ai_decisions %}, {{ n_ai_decisions }} from AI{% endif %}.
+  Rows shaded amber were user overrides; <span class="badge badge-ai">ai</span> tags an AI-driven choice.
+</p>
+{% for stage, items in decisions_by_stage %}
+  <div class="stage-head">{{ stage }}</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      {% for d in items %}
+      <tr class="{{ d.source }}">
+        <td><span class="badge badge-{{ d.source }}">{{ d.source }}</span></td>
+        <td><code>{{ d.key }}</code></td>
+        <td>{% if d.value is none %}<em>none</em>{% else %}<code>{{ d.value }}</code>{% endif %}</td>
+        <td>
+          {% if d.default is none or d.default == d.value %}
+            <span style="color:#aaa;">—</span>
+          {% else %}
+            <code style="color:#999;">{{ d.default }}</code>
+          {% endif %}
+        </td>
+        <td style="color:#555;">{{ d.rationale }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endfor %}
+{% else %}
+<p style="color:#999;">No decisions log found — was this run produced by scellrun &lt; 0.7.0?</p>
+{% endif %}
 
 <h2>Stages</h2>
 {% for stage in stages %}

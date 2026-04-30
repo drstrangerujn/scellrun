@@ -19,6 +19,8 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 
+from scellrun.decisions import Decision, record_many
+
 DEFAULT_RESOLUTIONS: tuple[float, ...] = (0.1, 0.3, 0.5, 0.8, 1.0)
 AIO_FULL_RESOLUTIONS: tuple[float, ...] = (
     0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0,
@@ -227,6 +229,9 @@ def run_integrate(
     use_ai: bool = False,
     ai_model: str = "claude-haiku-4-5-20251001",
     tissue: str | None = None,
+    run_dir: Path | None = None,
+    sample_key_user_supplied: bool = False,
+    resolutions_source: str = "auto",
 ) -> IntegrateResult:
     """
     Integrate one or more samples and run multi-resolution clustering.
@@ -250,8 +255,10 @@ def run_integrate(
 
     # Sample-key auto-detection (Seurat convention: orig.ident first)
     candidates = [c for c in ("orig.ident", "sample", "batch", "donor") if c in adata.obs.columns]
+    sample_key_was_autodetected = False
     if sample_key is None and candidates:
         sample_key = candidates[0]
+        sample_key_was_autodetected = True
         if len(candidates) > 1:
             print(
                 f"[scellrun] note: multiple potential sample keys detected: {candidates}. "
@@ -263,6 +270,7 @@ def run_integrate(
     # Cell-cycle scoring (optional regression target). Done BEFORE HVG so the
     # downstream regression target is well-defined.
     cc_regressed = False
+    cc_skip_reason: str | None = None
     if regress_cell_cycle:
         s_genes = list(S_GENES_HUMAN if species == "human" else _to_mouse_case(S_GENES_HUMAN))
         g2m_genes = list(G2M_GENES_HUMAN if species == "human" else _to_mouse_case(G2M_GENES_HUMAN))
@@ -276,6 +284,11 @@ def run_integrate(
                 f"{len(g2m_genes_present)}/{len(g2m_genes)} G2M genes "
                 f"matched adata.var_names (species={species!r}). "
                 "Cell-cycle regression SKIPPED — set --species correctly or check gene naming."
+            )
+            cc_skip_reason = (
+                f"only {len(s_genes_present)}/{len(s_genes)} S and "
+                f"{len(g2m_genes_present)}/{len(g2m_genes)} G2M genes matched var_names "
+                f"(species={species!r})"
             )
         else:
             sc.pp.normalize_total(adata, target_sum=1e4)
@@ -363,6 +376,25 @@ def run_integrate(
             model=ai_model,
         )
 
+    if run_dir is not None:
+        _record_integrate_decisions(
+            run_dir=run_dir,
+            method=method,
+            sample_key=sample_key,
+            sample_key_user_supplied=sample_key_user_supplied,
+            sample_key_was_autodetected=sample_key_was_autodetected,
+            sample_key_candidates=candidates,
+            n_pcs=n_pcs,
+            resolutions=tuple(resolutions),
+            resolutions_source=resolutions_source,
+            regress_cell_cycle=regress_cell_cycle,
+            cc_regressed=cc_regressed,
+            cc_skip_reason=cc_skip_reason,
+            ai_rec=ai_rec,
+            ai_model=ai_model,
+            use_ai=use_ai,
+        )
+
     return IntegrateResult(
         n_cells_in=n_cells_in,
         n_cells_used=n_cells_used,
@@ -375,6 +407,126 @@ def run_integrate(
         quality=quality,
         ai_recommendation=ai_rec,
     ), adata
+
+
+def _record_integrate_decisions(
+    *,
+    run_dir: Path,
+    method: str,
+    sample_key: str | None,
+    sample_key_user_supplied: bool,
+    sample_key_was_autodetected: bool,
+    sample_key_candidates: list[str],
+    n_pcs: int,
+    resolutions: tuple[float, ...],
+    resolutions_source: str,
+    regress_cell_cycle: bool,
+    cc_regressed: bool,
+    cc_skip_reason: str | None,
+    ai_rec: dict[str, str] | None,
+    ai_model: str,
+    use_ai: bool,
+) -> None:
+    """Append all integrate-stage decisions to the run-dir's decision log."""
+    decisions: list[Decision] = []
+
+    decisions.append(Decision(
+        stage="integrate",
+        key="method",
+        value=method,
+        default="harmony",
+        source="user" if method != "harmony" else "auto",
+        rationale=(
+            "Harmony default — most common in the in-house PI workflow"
+            if method == "harmony"
+            else f"--method {method!r} chosen explicitly"
+        ),
+    ))
+
+    decisions.append(Decision(
+        stage="integrate",
+        key="sample_key",
+        value=sample_key,
+        default=None,
+        source="user" if sample_key_user_supplied else "auto",
+        rationale=(
+            f"--sample-key passed explicitly: {sample_key!r}"
+            if sample_key_user_supplied
+            else (
+                f"auto-detected from obs columns; candidates={sample_key_candidates}, picked {sample_key!r} "
+                "(Seurat orig.ident convention; first match wins)"
+                if sample_key_was_autodetected
+                else "no sample/batch column in obs — single-batch run"
+            )
+        ),
+    ))
+
+    decisions.append(Decision(
+        stage="integrate",
+        key="n_pcs",
+        value=n_pcs,
+        default=30,
+        source="user" if n_pcs != 30 else "auto",
+        rationale="PCA components for neighbours/UMAP; 30 covers most tissue heterogeneity",
+    ))
+
+    decisions.append(Decision(
+        stage="integrate",
+        key="resolutions",
+        value=list(resolutions),
+        default=list(DEFAULT_RESOLUTIONS),
+        source="user" if resolutions_source == "user" else "auto",
+        rationale=(
+            "Leiden multi-resolution sweep; "
+            f"{len(resolutions)} values "
+            + ("(AIO 13-step full sweep)" if resolutions_source == "aio" else "(default short sweep)")
+        ),
+    ))
+
+    decisions.append(Decision(
+        stage="integrate",
+        key="regress_cell_cycle",
+        value=cc_regressed,
+        default=False,
+        source="user" if regress_cell_cycle else "auto",
+        rationale=(
+            "S/G2M scored and CC_difference regressed (Tirosh genes)"
+            if cc_regressed
+            else (
+                f"requested but skipped: {cc_skip_reason}"
+                if regress_cell_cycle and cc_skip_reason
+                else "off by default; turn on with --regress-cell-cycle if cycling cells dominate"
+            )
+        ),
+    ))
+
+    if use_ai:
+        if ai_rec is not None:
+            decisions.append(Decision(
+                stage="integrate",
+                key="ai_resolution_recommendation",
+                value=ai_rec.get("recommended_resolution"),
+                default=None,
+                source="ai",
+                rationale=(
+                    (ai_rec.get("rationale") or "")
+                    + f" [model={ai_model}]"
+                ).strip(),
+            ))
+        else:
+            decisions.append(Decision(
+                stage="integrate",
+                key="ai_resolution_recommendation",
+                value=None,
+                default=None,
+                source="ai",
+                rationale=(
+                    "AI recommendation requested but unavailable — "
+                    "missing ANTHROPIC_API_KEY, anthropic package, or API call failed"
+                ),
+            ))
+
+    record_many(run_dir, decisions)
 
 
 def write_artifacts(

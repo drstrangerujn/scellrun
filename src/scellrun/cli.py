@@ -156,12 +156,17 @@ def scrna_qc(
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
+    user_overrides_for_log = {k: v for k, v in overrides.items() if k != "species"}
     try:
         result = run_qc(
             adata,
             assay=assay,
             flag_doublets=flag_doublets,
             thresholds=thresholds,
+            run_dir=run_dir,
+            profile=profile,
+            user_thresholds_overrides=user_overrides_for_log,
+            lang=lang,
         )
     except InvalidInputError as e:
         console.print(f"[red]error:[/red] {e}")
@@ -310,6 +315,13 @@ def scrna_integrate(
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
+    if resolutions == "aio":
+        resolutions_source = "aio"
+    elif resolutions == "default" or resolutions == "0.1,0.3,0.5,0.8,1.0":
+        resolutions_source = "auto"
+    else:
+        resolutions_source = "user"
+
     try:
         result, integrated = run_integrate(
             adata,
@@ -323,6 +335,9 @@ def scrna_integrate(
             use_ai=use_ai,
             ai_model=ai_model,
             tissue=tissue,
+            run_dir=run_dir,
+            sample_key_user_supplied=sample_key is not None,
+            resolutions_source=resolutions_source,
         )
     except (IntegrationError, NotImplementedError) as e:
         console.print(f"[red]error:[/red] {e}")
@@ -444,6 +459,7 @@ def scrna_markers(
             pct_min=pct_min,
             only_positive=only_positive,
             top_n_per_cluster=top_n,
+            run_dir=run_dir,
         )
     except ValueError as e:
         console.print(f"[red]error:[/red] {e}")
@@ -561,6 +577,7 @@ def scrna_annotate(
             use_pubmed=use_pubmed,
             tissue=tissue,
             top_n_markers=top_n,
+            run_dir=run_dir,
         )
     except ValueError as e:
         console.print(f"[red]error:[/red] {e}")

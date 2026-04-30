@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
+from scellrun.decisions import Decision, record_many
 from scellrun.defaults import SCRNA_QC, SNRNA_QC, ScrnaQCThresholds
 
 
@@ -118,6 +119,10 @@ def run_qc(
     assay: str = "scrna",
     flag_doublets: bool | None = None,
     thresholds: ScrnaQCThresholds | None = None,
+    run_dir: Path | None = None,
+    profile: str = "default",
+    user_thresholds_overrides: dict[str, object] | None = None,
+    lang: str = "en",
 ) -> QCResult:
     """
     Compute QC metrics in place on `adata` and return a summary.
@@ -126,6 +131,10 @@ def run_qc(
     `adata.obs`) but does NOT drop them. Filtering is the user's decision;
     we make the decision legible by writing a CSV + report alongside the
     annotated h5ad.
+
+    When ``run_dir`` is provided, every non-trivial choice (profile, assay,
+    species, mt% applied, doublet flag, raw-counts heuristic outcome) is
+    appended to ``<run_dir>/00_decisions.jsonl`` for the v0.7 decision log.
     """
     if adata.n_obs == 0:
         raise InvalidInputError("input AnnData has 0 cells")
@@ -136,11 +145,14 @@ def run_qc(
         thresholds = SNRNA_QC if assay == "snrna" else SCRNA_QC
     if flag_doublets is None:
         flag_doublets = thresholds.flag_doublets
+    flag_doublets_user_choice = flag_doublets
 
     raw_check = _check_raw_counts(adata)
+    raw_check_skipped_doublets = False
     if raw_check == "looks_like_normalized" and flag_doublets:
         # scrublet on normalized data is meaningless; skip rather than mislead.
         flag_doublets = False
+        raw_check_skipped_doublets = True
 
     n_cells_in = adata.n_obs
     n_genes_in = adata.n_vars
@@ -262,6 +274,21 @@ def run_qc(
         ],
     }
 
+    if run_dir is not None:
+        _record_qc_decisions(
+            run_dir=run_dir,
+            profile=profile,
+            assay=assay,
+            thresholds=thresholds,
+            base_default=SNRNA_QC if assay == "snrna" else SCRNA_QC,
+            user_overrides=user_thresholds_overrides or {},
+            flag_doublets=flag_doublets,
+            flag_doublets_user_choice=flag_doublets_user_choice,
+            raw_check=raw_check,
+            raw_check_skipped_doublets=raw_check_skipped_doublets,
+            lang=lang,
+        )
+
     return QCResult(
         n_cells_in=n_cells_in,
         n_cells_pass=int(obs["scellrun_qc_pass"].sum()),
@@ -278,6 +305,133 @@ def run_qc(
         top_flagged=top_flagged,
         sensitivity=sensitivity,
     )
+
+
+def _record_qc_decisions(
+    *,
+    run_dir: Path,
+    profile: str,
+    assay: str,
+    thresholds: ScrnaQCThresholds,
+    base_default: ScrnaQCThresholds,
+    user_overrides: dict[str, object],
+    flag_doublets: bool,
+    flag_doublets_user_choice: bool,
+    raw_check: str,
+    raw_check_skipped_doublets: bool,
+    lang: str,
+) -> None:
+    """Append all QC-stage decisions to the run-dir's decision log."""
+    decisions: list[Decision] = [
+        Decision(
+            stage="qc",
+            key="profile",
+            value=profile,
+            default="default",
+            source="user" if profile != "default" else "auto",
+            rationale=(
+                f"profile {profile!r} chosen; profiles ship tissue-tuned thresholds "
+                "(mt%, hb%) and marker panels."
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="assay",
+            value=assay,
+            default="scrna",
+            source="user" if assay != "scrna" else "auto",
+            rationale=(
+                "snRNA tightens mt% to 5% (nuclei should be ~0% mt by definition)"
+                if assay == "snrna"
+                else "fresh-tissue scRNA defaults; mt% ceiling 20% from PI cohort"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="species",
+            value=thresholds.species,
+            default="human",
+            source="user" if thresholds.species != "human" else "auto",
+            rationale=(
+                "drives mt/ribo/hb gene-pattern matching (uppercased; same regex "
+                "covers MT-CO1 and mt-Co1)"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="max_pct_mt",
+            value=thresholds.max_pct_mt,
+            default=base_default.max_pct_mt,
+            source="user" if "max_pct_mt" in user_overrides else "auto",
+            rationale=(
+                f"mt% ceiling {thresholds.max_pct_mt}% — joint tissue is stress-prone, "
+                "the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, "
+                "AIO PM=20)"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="min_genes",
+            value=thresholds.min_genes,
+            default=base_default.min_genes,
+            source="user" if "min_genes" in user_overrides else "auto",
+            rationale=(
+                f"min n_genes {thresholds.min_genes} — Ilicic 2016 / "
+                "Luecken & Theis 2019 droplet-vs-cell floor"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="max_genes",
+            value=thresholds.max_genes,
+            default=base_default.max_genes,
+            source="user" if "max_genes" in user_overrides else "auto",
+            rationale=(
+                f"max n_genes {thresholds.max_genes} — multiplet upper cap on 10x v3 chemistry; "
+                "raise via --max-genes for high-RNA cell types (megakaryocytes, hepatocytes)"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="flag_doublets",
+            value=flag_doublets,
+            default=base_default.flag_doublets,
+            source=(
+                "auto"
+                if raw_check_skipped_doublets
+                else ("user" if flag_doublets_user_choice != base_default.flag_doublets else "auto")
+            ),
+            rationale=(
+                "scrublet skipped — input matrix looks log-normalized, doublet scoring is meaningless on it"
+                if raw_check_skipped_doublets
+                else (
+                    "scrublet on; report score distribution, never auto-drop (AIO leaves DF result attached)"
+                    if flag_doublets
+                    else "scrublet off by user request"
+                )
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="raw_counts_check",
+            value=raw_check,
+            default=None,
+            source="auto",
+            rationale=(
+                "input matrix sampled (200 rows): integer-valued + max>1 = looks_like_raw; "
+                "non-integer with small max = looks_like_normalized; otherwise unknown"
+            ),
+        ),
+        Decision(
+            stage="qc",
+            key="lang",
+            value=lang,
+            default="en",
+            source="user" if lang != "en" else "auto",
+            rationale="report language; both EN and ZH templates kept in sync",
+        ),
+    ]
+    record_many(run_dir, decisions)
 
 
 def write_artifacts(
