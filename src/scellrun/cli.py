@@ -250,6 +250,7 @@ def scrna_integrate(
     from scellrun.scrna.integrate import (
         AIO_FULL_RESOLUTIONS,
         DEFAULT_RESOLUTIONS,
+        IntegrationError,
         run_integrate,
         write_artifacts,
     )
@@ -306,16 +307,20 @@ def scrna_integrate(
     adata = ad.read_h5ad(h5ad)
     console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
 
-    result, integrated = run_integrate(
-        adata,
-        method=method,
-        sample_key=sample_key,
-        n_pcs=n_pcs,
-        resolutions=res_tuple,
-        regress_cell_cycle=regress_cell_cycle,
-        species=species,
-        drop_qc_fail=drop_qc_fail,
-    )
+    try:
+        result, integrated = run_integrate(
+            adata,
+            method=method,
+            sample_key=sample_key,
+            n_pcs=n_pcs,
+            resolutions=res_tuple,
+            regress_cell_cycle=regress_cell_cycle,
+            species=species,
+            drop_qc_fail=drop_qc_fail,
+        )
+    except (IntegrationError, NotImplementedError) as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
 
     console.print(f"used [bold green]{result.n_cells_used:,}[/bold green] / {result.n_cells_in:,} cells")
     if result.sample_key:
@@ -347,6 +352,121 @@ def scrna_integrate(
     console.print(f"UMAP grid: {artifacts['umap_grid']}")
     if "integrated_h5ad" in artifacts:
         console.print(f"integrated h5ad: {artifacts['integrated_h5ad']}")
+
+
+@scrna_app.command("markers")
+def scrna_markers(
+    h5ad: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Input integrated .h5ad (typically <run-dir>/02_integrate/integrated.h5ad)."),
+    run_dir: Path | None = typer.Option(None, "--run-dir", help="Run root directory. Default: parent of <h5ad>'s 02_integrate/ dir, else fresh."),
+    out: Path | None = typer.Option(None, "--out", "-o", help="Override output dir. By default writes to <run-dir>/03_markers/."),
+    resolutions: str | None = typer.Option(None, "--resolutions", help="Comma-separated resolutions (e.g. '0.3,0.5'). Default: all leiden_res_* columns present in the h5ad."),
+    logfc_threshold: float = typer.Option(1.0, "--logfc-threshold", help="Minimum |log2 fold-change| to keep a marker."),
+    pct_min: float = typer.Option(0.25, "--pct-min", help="Minimum fraction of cells in a cluster expressing the gene."),
+    only_positive: bool = typer.Option(True, "--only-positive/--all-direction", help="Keep only positive (cluster-up) markers."),
+    top_n: int = typer.Option(10, "--top-n", help="How many top markers per cluster to show in the HTML report (CSV always full)."),
+    force: bool = typer.Option(False, "--force/--no-force", help="Overwrite existing 03_markers/ artifacts."),
+    lang: str = typer.Option("en", "--lang", help="Report language: 'en' or 'zh'."),
+) -> None:
+    """
+    Per-cluster differential markers across all (or specified) clustering
+    resolutions in an integrated h5ad. Wilcoxon rank-sum, logfc>=1, pct>=0.25,
+    positive-only by default — same defaults the in-house pipeline uses.
+
+    Maps to AIO stage 5 (FindAllMarkers) + Rmd § 10 first block.
+    """
+    import anndata as ad
+
+    from scellrun.runlayout import (
+        StageOutputExists,
+        default_run_dir,
+        stage_dir,
+        write_run_meta,
+    )
+    from scellrun.scrna.markers import run_markers, write_artifacts
+
+    if lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+
+    if resolutions is not None:
+        try:
+            res_tuple: tuple[float, ...] | None = tuple(
+                float(x) for x in resolutions.split(",") if x.strip()
+            )
+        except ValueError:
+            console.print(f"[red]error:[/red] could not parse --resolutions {resolutions!r}")
+            raise typer.Exit(2) from None
+        if not res_tuple:
+            console.print("[red]error:[/red] --resolutions must list at least one value")
+            raise typer.Exit(2) from None
+    else:
+        res_tuple = None
+
+    if run_dir is None:
+        if h5ad.parent.name == "02_integrate":
+            run_dir = h5ad.parent.parent
+        else:
+            run_dir = default_run_dir()
+
+    if out is not None:
+        out_dir = out
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            out_dir = stage_dir(run_dir, "markers", force=force)
+        except StageOutputExists as e:
+            console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(2) from None
+
+    console.print(
+        f"[bold]scellrun scrna markers[/bold]  •  "
+        f"logfc≥{logfc_threshold}  pct≥{pct_min}  "
+        f"only_positive={only_positive}"
+    )
+    console.print(f"run-dir: [dim]{run_dir}[/dim]")
+    console.print(f"out-dir: [dim]{out_dir}[/dim]")
+    console.print(f"reading [dim]{h5ad}[/dim]")
+
+    adata = ad.read_h5ad(h5ad)
+    console.print(f"loaded: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+
+    try:
+        result, per_res_df = run_markers(
+            adata,
+            resolutions=res_tuple,
+            logfc_threshold=logfc_threshold,
+            pct_min=pct_min,
+            only_positive=only_positive,
+            top_n_per_cluster=top_n,
+        )
+    except ValueError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
+
+    for res, n in result.n_markers_per_resolution.items():
+        console.print(f"  res={res:g}: {n:,} markers across {result.cluster_counts[res]} clusters")
+
+    artifacts = write_artifacts(result, per_res_df, out_dir, lang=lang)
+    write_run_meta(
+        run_dir,
+        command="scrna markers",
+        params={
+            "h5ad": h5ad,
+            "out_dir": out_dir,
+            "resolutions": list(result.resolutions),
+            "logfc_threshold": logfc_threshold,
+            "pct_min": pct_min,
+            "only_positive": only_positive,
+            "top_n": top_n,
+            "force": force,
+            "lang": lang,
+        },
+    )
+
+    console.print(f"[bold]report:[/bold] [link=file://{artifacts['report'].resolve()}]{artifacts['report']}[/link]")
+    for key, p in artifacts.items():
+        if key.startswith("markers_res_"):
+            console.print(f"  {p}")
 
 
 @profiles_app.command("list")

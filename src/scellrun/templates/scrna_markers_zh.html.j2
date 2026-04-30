@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>scellrun — 单细胞 cluster markers 报告</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #222; line-height: 1.7; }
+  h1 { font-size: 1.6rem; border-bottom: 2px solid #333; padding-bottom: .3rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; margin: .3rem 0 1.2rem; font-size: .9rem; }
+  th, td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  thead { background: #f6f6f6; }
+  .kv { display: grid; grid-template-columns: 280px 1fr; gap: .25rem .8rem; margin: .5rem 0 1rem; }
+  .kv dt { color: #666; }
+  .rationale { background: #fafaf6; border-left: 3px solid #c7b07a; padding: .6rem .9rem; margin: .6rem 0; font-size: .92rem; }
+  .rationale strong { color: #5a4710; }
+  footer { color: #888; font-size: .82rem; margin-top: 3rem; border-top: 1px solid #eee; padding-top: .7rem; }
+  code { background: #f0f0f0; padding: .05rem .3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>单细胞 cluster markers 报告</h1>
+
+<h2>总览</h2>
+<dl class="kv">
+  <dt>使用细胞数</dt>            <dd>{{ "{:,}".format(result.n_cells_used) }}</dd>
+  <dt>分辨率</dt>                <dd>{{ result.resolutions | join(", ") }}</dd>
+  <dt>统计检验</dt>              <dd>Wilcoxon 秩和检验</dd>
+  <dt>log2 倍数变化下限</dt>     <dd>{{ result.logfc_threshold }}</dd>
+  <dt>cluster 内表达比例下限</dt><dd>{{ result.pct_min }}</dd>
+  <dt>仅正向 markers</dt>        <dd>{{ result.only_positive }}</dd>
+  <dt>每 cluster 表中显示前 N 个</dt><dd>{{ result.top_n }}</dd>
+</dl>
+
+<h2>每个分辨率找到的 markers 数</h2>
+<dl class="kv">
+{% for res, n in result.n_markers_per_resolution.items() %}
+  <dt>resolution = {{ res }}（{{ result.cluster_counts[res] }} 个 clusters）</dt>
+  <dd>{{ "{:,}".format(n) }} 行 markers
+    — 完整列表：<code>{{ csv_filenames[res] }}</code></dd>
+{% endfor %}
+</dl>
+
+<div class="rationale">
+  <strong>默认参数</strong>：Wilcoxon 秩和检验，log2 倍数变化 ≥ 1.0，在 cluster 内表达比例 ≥ 25%，
+  只输出正向 markers。和团队内部 pipeline 一致；要调整用 <code>--logfc-threshold</code>、
+  <code>--pct-min</code>、<code>--only-positive/--all-direction</code>。
+</div>
+
+{% for res, top_html in per_res_top_html.items() %}
+<h2>每 cluster 的 top markers — resolution {{ res }}</h2>
+{{ top_html | safe }}
+{% endfor %}
+
+<h2>下一步</h2>
+<p>
+  打开同目录的 per-resolution CSV 看完整 marker 列表。v0.4 的 <code>scellrun scrna annotate</code>
+  会把这些 markers 跟 profile 自带的 panel 对照（比如 <code>joint-disease</code> profile 里 Fan 2024 软骨 11 亚型 panel），
+  自动给每个 cluster 出"广义 + 亚型"两层 celltype 标签。
+</p>
+
+<footer>
+  本报告由 scellrun 生成。Wilcoxon 检验默认参数与团队内部 pipeline 一致。
+</footer>
+
+</body>
+</html>
