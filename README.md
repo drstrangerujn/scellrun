@@ -3,8 +3,20 @@
 [![CI](https://github.com/drstrangerujn/scellrun/actions/workflows/ci.yml/badge.svg)](https://github.com/drstrangerujn/scellrun/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **scellrun lowers the bar to running a defensible single-cell analysis.**
-> One command, a publication-quality report. You don't need to learn scanpy first.
+> **Your LLM agent uses this.** scellrun is a CLI an agent (Claude Code,
+> Hermes, Codex, …) drives end-to-end on a researcher's behalf — convert
+> cellranger output, QC, integrate, cluster, annotate, render an HTML
+> report — and quotes the decision log back when the researcher asks
+> "why mt% 20?" or "why res 0.5?". The deliverable is a defensible
+> analysis the user can read in five minutes, not a pipeline they have
+> to learn.
+
+The agent-driven story is the canonical one. See
+[`docs/agent-demo.md`](docs/agent-demo.md) for a verbatim transcript on
+real OA cartilage scRNA data. The agent's operational guide is
+[`skills/scellrun/SKILL.md`](skills/scellrun/SKILL.md).
+
+You can also drive scellrun yourself if you prefer:
 
 ```bash
 # 1. one-time: a clean Python environment so scellrun's deps don't collide with anything else on your machine
@@ -26,9 +38,12 @@ scellrun scrna convert path/to/cellranger_outs -o data.h5ad
 scellrun analyze data.h5ad --tissue "OA cartilage"
 ```
 
-Want a Chinese report? Add `--lang zh`.
+Want a Chinese report? Add `--lang zh`. Want a clinician walkthrough?
+See [`docs/quickstart.md`](docs/quickstart.md). Want to add a profile or
+a stage? See [`docs/contributing.md`](docs/contributing.md).
 
-**Status:** v0.1.0, early alpha. APIs will change without warning. Don't pin against a tag yet.
+**Status:** v1.0.0. The CLI surface is frozen for the v1.x series; new
+stages and profiles land additively.
 
 ## Who this is for
 
@@ -65,16 +80,29 @@ analysis on day one.
 | `nf-core` pipelines           | General-purpose, infrastructure-heavy, vendor-neutral workflows     |
 | **`scellrun`**                | An *opinionated, report-first* CLI optimized for low barrier to entry |
 
-## v0.1 scope
+## What v1.0 ships
 
-- `scellrun scrna qc <h5ad>` — single-cell QC (mt%, ribo%, hb%, n_genes, doublets)
-  with defensible thresholds. Outputs an HTML report with rationale text, a
-  per-cell CSV, and an annotated `qc.h5ad` ready for the v0.2 integration step.
-  Cells are *flagged* (`obs.scellrun_qc_pass`), never silently dropped.
+- `scellrun analyze <h5ad>` — one-shot pipeline (qc → integrate →
+  markers → annotate → report). Writes a deterministic decision log
+  (`00_decisions.jsonl`) and a top-level `05_report/index.html` with an
+  At-a-glance block + per-stage decision tables.
+- `scellrun scrna {qc,integrate,markers,annotate}` — per-stage
+  commands for deep customization.
+- `scellrun scrna convert <cellranger_dir> -o data.h5ad` — convert
+  10x cellranger / Seurat-mtx output.
+- Self-check + `--auto-fix` — each stage flags actionable issues
+  (low QC pass-rate, panel-tissue mismatch, fragmented clustering)
+  and the orchestrator can apply the cheapest fix once.
+- Profiles: `default` and `joint-disease` (Fan 2024 chondrocyte
+  11-subtype + 15-group celltype_broad panel).
+- Optional `--ai`: Anthropic-API LLM second opinion on annotation +
+  resolution recommendation.
+- Distribution: PyPI wheel, Dockerfile, `skills/scellrun/SKILL.md`
+  for agent harnesses.
 
-That's it. See [`ROADMAP.md`](ROADMAP.md) for v0.2-v0.5 (integrate, markers,
-annotate, multi-stage report) and the planned `scellrun run --steps ...`
-pipeline mode.
+See [`ROADMAP.md`](ROADMAP.md) for the post-v1.0 plan (conda-forge
+feedstock, registry-pushed Docker image, bulk RNA-seq, metabolomics
+composite scoring, proteomics integration).
 
 ## Install
 
@@ -105,15 +133,15 @@ git clone https://github.com/drstrangerujn/scellrun.git
 cd scellrun
 conda create -n scellrun-dev python=3.11 -y && conda activate scellrun-dev
 pip install -e ".[dev]"
-pytest -q          # 25 tests should pass
+pytest -q          # full suite should be green
 ```
 
 ## Profiles
 
-Different tissue domains have different defaults. v0.1 ships two profiles:
+Different tissue domains have different defaults. v1.0 ships two profiles:
 
 - `default` — fresh-tissue 10x v3 chemistry, joint-tissue-aware mt% ceiling
-- `joint-disease` — tighter hb% for avascular cartilage; ships the **Fan 2024 chondrocyte 11-subtype panel** + 15-group broad celltype panel for v0.4 annotation
+- `joint-disease` — tighter hb% for avascular cartilage; ships the **Fan 2024 chondrocyte 11-subtype panel** + 15-group broad celltype panel used by `scrna annotate`
 
 ```bash
 scellrun profiles list

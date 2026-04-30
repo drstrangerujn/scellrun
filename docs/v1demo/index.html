@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scellrun — full pipeline report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; color: #222; line-height: 1.55; }
+  h1 { font-size: 1.7rem; border-bottom: 2px solid #333; padding-bottom: .3rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.2rem; padding-bottom: .15rem; border-bottom: 1px solid #eee; }
+  h3 { font-size: 1rem; color: #555; margin-top: 1.4rem; }
+  a { color: #1f4e8a; }
+  .stage-card { padding: .8rem 1rem; border: 1px solid #e6e6e6; border-radius: .4rem; margin: .8rem 0; background: #fafafa; }
+  .stage-card.absent { opacity: .55; background: #f3f3f3; }
+  .pill { display: inline-block; padding: .1rem .55rem; border-radius: .8rem; background: #eef4ff; color: #1f4e8a; font-size: .8rem; font-weight: 600; }
+  .pill.absent { background: #eee; color: #888; }
+  table.runs { font-size: .88rem; width: 100%; border-collapse: collapse; }
+  table.runs th, table.runs td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
+  table.runs th { background: #f6f6f6; }
+  code { background: #f0f0f0; padding: .05rem .3rem; border-radius: 3px; font-size: .9em; }
+  ul.artifacts { list-style: square; padding-left: 1.2rem; font-size: .9rem; }
+  .provenance { background: #fafaf6; border-left: 3px solid #c7b07a; padding: .6rem .9rem; margin: .8rem 0 1.2rem; font-size: .92rem; color: #555; }
+  table.decisions { font-size: .88rem; width: 100%; border-collapse: collapse; margin-top: .4rem; }
+  table.decisions th, table.decisions td { border: 1px solid #e3e3e3; padding: .3rem .55rem; text-align: left; vertical-align: top; }
+  table.decisions th { background: #f6f6f6; font-weight: 600; }
+  table.decisions tr.user td { background: #fff8ef; }
+  .badge { display: inline-block; padding: .05rem .45rem; border-radius: .7rem; font-size: .72rem; font-weight: 600; letter-spacing: .02em; }
+  .badge-auto { background: #eef4ff; color: #1f4e8a; }
+  .badge-user { background: #fdf0d8; color: #8a5a1f; }
+  .badge-ai   { background: #efe4ff; color: #5a1f8a; }
+  .stage-head { font-size: 1rem; margin: 1.2rem 0 .3rem; color: #333; font-weight: 600; }
+  .summary-counts { color: #666; font-size: .9rem; margin-top: .2rem; }
+  .glance { background: #f8fbff; border-left: 3px solid #1f4e8a; padding: .8rem 1rem; margin: .6rem 0 1rem; }
+  .glance-row { margin: .25rem 0; font-size: .95rem; }
+  .glance-label { color: #555; min-width: 11rem; display: inline-block; }
+  .glance-trigger { color: #b34141; font-weight: 600; }
+  .glance ul { margin: .25rem 0 .25rem 1.2rem; padding: 0; }
+</style>
+</head>
+<body>
+
+<h1>scellrun — full pipeline report</h1>
+
+<p style="color:#666;">
+  Run directory: <code>run-20260430-151851</code>
+</p>
+
+<h2>At a glance</h2>
+<div class="glance">
+  <div class="glance-row">
+    <span class="glance-label">QC pass rate:</span>
+    
+      <strong>87.0%</strong>
+      
+        (10835 / 12451 cells)
+      
+    
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">Integration method:</span>
+    <code>none</code>
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">Annotation panel:</span>
+    <code>chondrocyte_markers</code>
+  </div>
+  <div class="glance-row">
+    <span class="glance-label">Chosen resolution:</span>
+    
+      <code>0.3</code>
+      
+        — <strong>13</strong> clusters
+      
+    
+  </div>
+  
+  <div class="glance-row">
+    <span class="glance-label">Top cell-type labels:</span>
+    <ul>
+      
+        <li><code>Unassigned</code> — 6 cluster(s)</li>
+      
+        <li><code>InfC</code> — 3 cluster(s)</li>
+      
+        <li><code>preInfC</code> — 1 cluster(s)</li>
+      
+    </ul>
+  </div>
+  
+  
+</div>
+
+<h2>Decision summary</h2>
+
+<p class="summary-counts">
+  27 decisions logged across 5 stage(s).
+  Rows shaded amber were user overrides; <span class="badge badge-ai">ai</span> tags an AI-driven choice.
+</p>
+
+  <div class="stage-head">qc</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      
+      <tr class="user">
+        <td><span class="badge badge-user">user</span></td>
+        <td><code>profile</code></td>
+        <td><code>joint-disease</code></td>
+        <td>
+          
+            <code style="color:#999;">default</code>
+          
+        </td>
+        <td style="color:#555;">profile 'joint-disease' chosen; profiles ship tissue-tuned thresholds (mt%, hb%) and marker panels.</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>assay</code></td>
+        <td><code>scrna</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">fresh-tissue scRNA defaults; mt% ceiling 20% from PI cohort</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>species</code></td>
+        <td><code>human</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">drives mt/ribo/hb gene-pattern matching (uppercased; same regex covers MT-CO1 and mt-Co1)</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>max_pct_mt</code></td>
+        <td><code>20.0</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">mt% ceiling 20.0% — joint tissue is stress-prone, the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, AIO PM=20)</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>min_genes</code></td>
+        <td><code>200</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">min n_genes 200 — Ilicic 2016 / Luecken & Theis 2019 droplet-vs-cell floor</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>max_genes</code></td>
+        <td><code>4000</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">max n_genes 4000 — multiplet upper cap on 10x v3 chemistry; raise via --max-genes for high-RNA cell types (megakaryocytes, hepatocytes)</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>flag_doublets</code></td>
+        <td><code>True</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">scrublet on; report score distribution, never auto-drop (AIO leaves DF result attached)</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>raw_counts_check</code></td>
+        <td><code>looks_like_raw</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">input matrix sampled (200 rows): integer-valued + max>1 = looks_like_raw; non-integer with small max = looks_like_normalized; otherwise unknown</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>lang</code></td>
+        <td><code>en</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">report language; both EN and ZH templates kept in sync</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+  <div class="stage-head">integrate</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>method</code></td>
+        <td><code>none</code></td>
+        <td>
+          
+            <code style="color:#999;">harmony</code>
+          
+        </td>
+        <td style="color:#555;">--method 'none' chosen explicitly</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>sample_key</code></td>
+        <td><em>none</em></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">no sample/batch column in obs — single-batch run</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>n_pcs</code></td>
+        <td><code>30</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">PCA components for neighbours/UMAP; 30 covers most tissue heterogeneity</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>resolutions</code></td>
+        <td><code>[0.1, 0.3, 0.5, 0.8, 1.0]</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">Leiden multi-resolution sweep; 5 values (default short sweep)</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>regress_cell_cycle</code></td>
+        <td><code>False</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">off by default; turn on with --regress-cell-cycle if cycling cells dominate</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+  <div class="stage-head">markers</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>resolutions</code></td>
+        <td><code>[0.1, 0.3, 0.5, 0.8, 1.0]</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">auto-detected from leiden_res_* columns in the integrated h5ad</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>logfc_threshold</code></td>
+        <td><code>1.0</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">|log2fc| >= 1.0 — Seurat in-house default; tightens to 1.0 to drop near-zero-effect markers</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>pct_min</code></td>
+        <td><code>0.25</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">min fraction expressing >= 0.25 — drops genes hit by dropout in the focal cluster</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>only_positive</code></td>
+        <td><code>True</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">positive-only markers (cluster-up) — what FindAllMarkers ships by default</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+  <div class="stage-head">annotate</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      
+      <tr class="user">
+        <td><span class="badge badge-user">user</span></td>
+        <td><code>profile</code></td>
+        <td><code>joint_disease</code></td>
+        <td>
+          
+            <code style="color:#999;">default</code>
+          
+        </td>
+        <td style="color:#555;">profile selects which marker panels are available for matching</td>
+      </tr>
+      
+      <tr class="user">
+        <td><span class="badge badge-user">user</span></td>
+        <td><code>panel</code></td>
+        <td><code>chondrocyte_markers</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">--panel 'chondrocyte_markers' forced</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>resolution</code></td>
+        <td><code>0.3</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">matching against leiden_res_0.3 clusters; the orchestrator picks this from integrate's quality table when called via `scellrun analyze`</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>use_ai</code></td>
+        <td><code>False</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">AI second-opinion off — deterministic panel match only</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>use_pubmed</code></td>
+        <td><code>False</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">PubMed lookup off — turn on with --pubmed for the literature evidence column</td>
+      </tr>
+      
+      <tr class="user">
+        <td><span class="badge badge-user">user</span></td>
+        <td><code>tissue</code></td>
+        <td><code>OA cartilage</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">tissue context 'OA cartilage' drives PubMed scoping and AI prompt</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+  <div class="stage-head">analyze</div>
+  <table class="decisions">
+    <thead>
+      <tr><th>source</th><th>key</th><th>value</th><th>default</th><th>rationale</th></tr>
+    </thead>
+    <tbody>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>method_downgrade</code></td>
+        <td><code>none</code></td>
+        <td>
+          
+            <code style="color:#999;">harmony</code>
+          
+        </td>
+        <td style="color:#555;">no sample/batch column (orig.ident/sample/batch/donor) in obs — single-sample input; auto-downgraded --method from harmony to none. Pass --method harmony explicitly to force the original behavior.</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>chosen_resolution_for_annotate</code></td>
+        <td><code>0.3</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">fewest singletons → most balanced (every resolution fragmented) — picked res=0.3: n_clusters=13, largest=31.5%, smallest=0.2%, singletons=2</td>
+      </tr>
+      
+      <tr class="auto">
+        <td><span class="badge badge-auto">auto</span></td>
+        <td><code>annotate.auto_panel</code></td>
+        <td><code>chondrocyte_markers</code></td>
+        <td>
+          
+            <span style="color:#aaa;">—</span>
+          
+        </td>
+        <td style="color:#555;">fine-subtype panel preferred (chondrocyte hits dominate or are tied)</td>
+      </tr>
+      
+    </tbody>
+  </table>
+
+
+
+<h2>Stages</h2>
+
+<div class="stage-card ">
+  <div>
+    <span class="pill ">1. qc</span>
+    
+      <span style="font-size:.85rem; color:#555;">→ <code>01_qc/</code></span>
+      
+        — <a href="../01_qc/report.html">open report.html</a>
+      
+    
+  </div>
+  
+  <ul class="artifacts">
+    
+      <li><a href="../01_qc/per_cell_metrics.csv">per_cell_metrics.csv</a></li>
+    
+      <li><a href="../01_qc/qc.h5ad">qc.h5ad</a></li>
+    
+      <li><a href="../01_qc/report.html">report.html</a></li>
+    
+  </ul>
+  
+</div>
+
+<div class="stage-card ">
+  <div>
+    <span class="pill ">2. integrate</span>
+    
+      <span style="font-size:.85rem; color:#555;">→ <code>02_integrate/</code></span>
+      
+        — <a href="../02_integrate/report.html">open report.html</a>
+      
+    
+  </div>
+  
+  <ul class="artifacts">
+    
+      <li><a href="../02_integrate/cluster_sizes.png">cluster_sizes.png</a></li>
+    
+      <li><a href="../02_integrate/integrated.h5ad">integrated.h5ad</a></li>
+    
+      <li><a href="../02_integrate/report.html">report.html</a></li>
+    
+      <li><a href="../02_integrate/umap_grid.png">umap_grid.png</a></li>
+    
+  </ul>
+  
+</div>
+
+<div class="stage-card ">
+  <div>
+    <span class="pill ">3. markers</span>
+    
+      <span style="font-size:.85rem; color:#555;">→ <code>03_markers/</code></span>
+      
+        — <a href="../03_markers/report.html">open report.html</a>
+      
+    
+  </div>
+  
+  <ul class="artifacts">
+    
+      <li><a href="../03_markers/markers_res_0.1.csv">markers_res_0.1.csv</a></li>
+    
+      <li><a href="../03_markers/markers_res_0.3.csv">markers_res_0.3.csv</a></li>
+    
+      <li><a href="../03_markers/markers_res_0.5.csv">markers_res_0.5.csv</a></li>
+    
+      <li><a href="../03_markers/markers_res_0.8.csv">markers_res_0.8.csv</a></li>
+    
+      <li><a href="../03_markers/markers_res_1.csv">markers_res_1.csv</a></li>
+    
+      <li><a href="../03_markers/report.html">report.html</a></li>
+    
+  </ul>
+  
+</div>
+
+<div class="stage-card ">
+  <div>
+    <span class="pill ">4. annotate</span>
+    
+      <span style="font-size:.85rem; color:#555;">→ <code>04_annotate/</code></span>
+      
+        — <a href="../04_annotate/report.html">open report.html</a>
+      
+    
+  </div>
+  
+  <ul class="artifacts">
+    
+      <li><a href="../04_annotate/annotated.h5ad">annotated.h5ad</a></li>
+    
+      <li><a href="../04_annotate/annotations.csv">annotations.csv</a></li>
+    
+      <li><a href="../04_annotate/report.html">report.html</a></li>
+    
+  </ul>
+  
+</div>
+
+
+<h2>Run manifest (chronological)</h2>
+
+<table class="runs">
+  <thead>
+    <tr><th>#</th><th>command</th><th>ran at</th><th>key params</th></tr>
+  </thead>
+  <tbody>
+    
+    <tr>
+      <td>1</td>
+      <td><code>analyze:qc</code></td>
+      <td>2026-04-30T15:20:32.649120+00:00</td>
+      <td style="font-size:.78rem; color:#555;">
+        
+          
+        
+          
+        
+          
+            <span style="margin-right:.6rem;">profile=<code>joint-disease</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">species=<code>human</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">thresholds=<code>{'species': 'human', 'min_genes': 200, 'max_genes': 4000, 'min_counts': 500, 'max_pct_mt': 20.0, 'max_pct_ribo': 50.0, 'max_pct_hb': 2.0, 'min_cells_per_gene': 3, 'flag_doublets': True}</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">force=<code>False</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">lang=<code>en</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">attempt_id=<code>cae89793d0f9470a9c7f38894928f304</code></span>
+          
+        
+      </td>
+    </tr>
+    
+    <tr>
+      <td>2</td>
+      <td><code>analyze:integrate</code></td>
+      <td>2026-04-30T15:20:52.573352+00:00</td>
+      <td style="font-size:.78rem; color:#555;">
+        
+          
+        
+          
+        
+          
+            <span style="margin-right:.6rem;">method=<code>none</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">sample_key=<code>None</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">n_pcs=<code>30</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">resolutions=<code>[0.1, 0.3, 0.5, 0.8, 1.0]</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">regress_cell_cycle=<code>False</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">species=<code>human</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">use_ai=<code>False</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">tissue=<code>OA cartilage</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">lang=<code>en</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">attempt_id=<code>cae89793d0f9470a9c7f38894928f304</code></span>
+          
+        
+      </td>
+    </tr>
+    
+    <tr>
+      <td>3</td>
+      <td><code>analyze:markers</code></td>
+      <td>2026-04-30T15:23:51.773654+00:00</td>
+      <td style="font-size:.78rem; color:#555;">
+        
+          
+        
+          
+        
+          
+            <span style="margin-right:.6rem;">resolutions=<code>[0.1, 0.3, 0.5, 0.8, 1.0]</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">logfc_threshold=<code>1.0</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">pct_min=<code>0.25</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">only_positive=<code>True</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">top_n=<code>10</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">lang=<code>en</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">attempt_id=<code>cae89793d0f9470a9c7f38894928f304</code></span>
+          
+        
+      </td>
+    </tr>
+    
+    <tr>
+      <td>4</td>
+      <td><code>analyze:annotate</code></td>
+      <td>2026-04-30T15:24:49.548069+00:00</td>
+      <td style="font-size:.78rem; color:#555;">
+        
+          
+        
+          
+        
+          
+            <span style="margin-right:.6rem;">profile=<code>joint-disease</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">panel_name=<code>chondrocyte_markers</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">resolution=<code>0.3</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">use_ai=<code>False</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">use_pubmed=<code>False</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">tissue=<code>OA cartilage</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">lang=<code>en</code></span>
+          
+        
+          
+            <span style="margin-right:.6rem;">attempt_id=<code>cae89793d0f9470a9c7f38894928f304</code></span>
+          
+        
+      </td>
+    </tr>
+    
+  </tbody>
+</table>
+
+
+<h2>Provenance trail</h2>
+<div class="provenance">
+  Each stage's report carries three tiers of evidence:
+  <ul style="margin: .4rem 0 0 1rem;">
+    <li><strong>Data</strong> — per-cell metrics, cluster sizes, sample mixing.</li>
+    <li><strong>Inference</strong> — opinionated thresholds (with rationale text in each report) and panel matches (with score / margin to runner-up).</li>
+    <li><strong>Literature</strong> — when <code>--pubmed</code> is enabled at the annotate stage, top recent PubMed papers per marker.</li>
+  </ul>
+</div>
+
+<p style="font-size:.85rem; color:#888; margin-top:2rem;">
+  Generated by <code>scellrun report</code>. To export to PDF, open this page in
+  a browser and use Print → Save as PDF (Chromium prints these layouts cleanly).
+</p>
+
+</body>
+</html>

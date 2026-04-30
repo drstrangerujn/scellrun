@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scellrun"
-version = "0.9.1"
+version = "1.0.0"
 description = "Opinionated, report-first CLI for single-cell and multi-omics analysis. Sane defaults baked in, defensible deliverables out."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["scRNA-seq", "single-cell", "multi-omics", "bioinformatics", "pipeline", "qc", "report"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",

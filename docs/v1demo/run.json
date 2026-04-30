@@ -1,0 +1,99 @@
+{
+  "created_at": "2026-04-30T15:20:32.649066+00:00",
+  "stages": [
+    {
+      "command": "analyze:qc",
+      "ran_at": "2026-04-30T15:20:32.649120+00:00",
+      "params": {
+        "h5ad": "data.h5ad",
+        "out_dir": "scellrun_out/run-20260430-151851/01_qc",
+        "profile": "joint-disease",
+        "species": "human",
+        "thresholds": {
+          "species": "human",
+          "min_genes": 200,
+          "max_genes": 4000,
+          "min_counts": 500,
+          "max_pct_mt": 20.0,
+          "max_pct_ribo": 50.0,
+          "max_pct_hb": 2.0,
+          "min_cells_per_gene": 3,
+          "flag_doublets": true
+        },
+        "force": false,
+        "lang": "en",
+        "attempt_id": "cae89793d0f9470a9c7f38894928f304"
+      }
+    },
+    {
+      "command": "analyze:integrate",
+      "ran_at": "2026-04-30T15:20:52.573352+00:00",
+      "params": {
+        "h5ad": "scellrun_out/run-20260430-151851/01_qc/qc.h5ad",
+        "out_dir": "scellrun_out/run-20260430-151851/02_integrate",
+        "method": "none",
+        "sample_key": null,
+        "n_pcs": 30,
+        "resolutions": [
+          0.1,
+          0.3,
+          0.5,
+          0.8,
+          1.0
+        ],
+        "regress_cell_cycle": false,
+        "species": "human",
+        "use_ai": false,
+        "tissue": "OA cartilage",
+        "lang": "en",
+        "attempt_id": "cae89793d0f9470a9c7f38894928f304"
+      }
+    },
+    {
+      "command": "analyze:markers",
+      "ran_at": "2026-04-30T15:23:51.773654+00:00",
+      "params": {
+        "h5ad": "scellrun_out/run-20260430-151851/02_integrate/integrated.h5ad",
+        "out_dir": "scellrun_out/run-20260430-151851/03_markers",
+        "resolutions": [
+          0.1,
+          0.3,
+          0.5,
+          0.8,
+          1.0
+        ],
+        "logfc_threshold": 1.0,
+        "pct_min": 0.25,
+        "only_positive": true,
+        "top_n": 10,
+        "lang": "en",
+        "attempt_id": "cae89793d0f9470a9c7f38894928f304"
+      }
+    },
+    {
+      "command": "analyze:annotate",
+      "ran_at": "2026-04-30T15:24:49.548069+00:00",
+      "params": {
+        "h5ad": "scellrun_out/run-20260430-151851/02_integrate/integrated.h5ad",
+        "out_dir": "scellrun_out/run-20260430-151851/04_annotate",
+        "profile": "joint-disease",
+        "panel_name": "chondrocyte_markers",
+        "resolution": 0.3,
+        "use_ai": false,
+        "use_pubmed": false,
+        "tissue": "OA cartilage",
+        "lang": "en",
+        "attempt_id": "cae89793d0f9470a9c7f38894928f304"
+      }
+    },
+    {
+      "command": "analyze:report",
+      "ran_at": "2026-04-30T15:24:49.568448+00:00",
+      "params": {
+        "out_dir": "scellrun_out/run-20260430-151851/05_report",
+        "lang": "en",
+        "attempt_id": "cae89793d0f9470a9c7f38894928f304"
+      }
+    }
+  ]
+}

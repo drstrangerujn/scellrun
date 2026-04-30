@@ -420,3 +420,113 @@ Either of these alone is enough to make v0.7 unsafe for a clinician
 deliverable without a maintainer review. The deterministic provenance trail
 (decision log, per-cell metrics CSV) is honest, but the user-facing surfaces
 that summarize them aren't.
+
+---
+
+# scellrun v1.0 dogfood — second pass on real OA data
+
+Test environment: hospital server, conda env `scellrun-v1demo` (python
+3.11.15), `pip install --upgrade --index-url https://pypi.org/simple/
+scellrun==0.9.1`. Same sample as the v0.7 run: BML_1, 12,451 cells ×
+33,538 genes. One-shot `scellrun analyze --tissue "OA cartilage"
+--profile joint-disease --no-ai --auto-fix --lang en`. Run dir on
+hospital: `/tmp/scellrun_v1demo/scellrun_out/run-20260430-151851`. Repo
+copy under `docs/v1demo/`.
+
+Verdict at a glance:
+- **#001** (single-sample harmony crash) — fixed in v0.9.1, confirmed:
+  `method_downgrade=none` row appears with the rationale string.
+- **#002** (top-marker noise) — fixed in v0.9.1, confirmed: cluster 0's
+  top markers are CLEC14A/RAMP3/EMCN/PLVAP — clean endothelial signature.
+- **#003** (silent ProC) — fixed in v0.9.1, confirmed: 6 of 13 clusters
+  honestly labeled `Unassigned` (score 0) instead of forced to ProC.
+- **#005** (resolution picker fragmented) — fixed in v0.9.1, confirmed:
+  picker chose res=0.3 (n_clusters=13, singletons=2) instead of v0.7's
+  res=1.0 (singletons=7).
+- **#007** (index page lacks summary) — fixed in v0.9.1, confirmed:
+  At-a-glance block renders QC pass-rate / method / panel / chosen
+  resolution / top labels.
+- **#008** (absolute path leak) — fixed in v0.9.1, confirmed: index
+  shows just `run-20260430-151851`.
+- **#010** (no resume after partial run) — partial: docs/quickstart.md
+  notes the auto-resume default; safe to defer until a user hits it.
+- **#012** is the new finding from this run (below).
+
+Issues remaining open from v0.7 that surfaced again on v1.0:
+
+- **#004** (scrublet auto-threshold collapse → 0 doublets): unchanged.
+  This is a scrublet-side issue and the safe fix needs the QC report
+  surface to flag "0 + max-score>0.3 = auto-threshold collapsed";
+  defer to maintainer.
+- **#006** (h5ad size): mostly fixed in v0.9.1 (float32 cast +
+  log-normalized .raw on annotate); the integrated.h5ad is still
+  ~700 MB on this sample, so it's better but not great. Defer.
+- **#009** (deprecation warnings): unchanged. The PerformanceWarning
+  spam from rank_genes_groups is from inside scanpy itself; not
+  user-actionable. Defer.
+- **#011** (install heaviness hint): partial. The install touch file
+  is in place but the README still doesn't say "1-3 minutes on first
+  install"; v1.0 README rewrite folds the agent-driven framing in but
+  doesn't add the heaviness note. Quickstart doc covers it.
+
+## [#012] annotate immune-marker shortlist too narrow → mismatch heuristic doesn't fire on subchondral-bone OA
+
+**Stage:** annotate / self-check
+**Severity:** P1 (silent — the heuristic that should catch the panel
+mismatch sits in the code path but doesn't fire)
+**Reproducer:** the v1demo run above; `04_annotate/annotations.csv`
+shows 6/13 clusters Unassigned + 3/13 mislabeled (ProC for pericyte,
+HTC for osteoclast, InfC for plasmacytoid DC) with low non-zero panel
+scores.
+**What happened:** the v0.8 `annotate_panel_tissue_mismatch` self-check
+counts immune-marker hits per cluster against `IMMUNE_MARKER_HINTS`
+(self_check.py:352). On the BML_1 sample only one cluster (cluster 3,
+NK-like, NKG7+KLRD1) clears the ≥2-hits bar. Other clearly-immune
+clusters fall below: cluster 1 (macrophage) has only LYZ from the
+shortlist but is full of HLA-DRA/HLA-DRB1/HLA-DPA1/HLA-DPB1/HLA-DRB5/CD74
+— none in the shortlist. Cluster 11 (plasma) has CD79A but not the
+plasma-specific MZB1/JCHAIN/IGHG1. Cluster 12 (mast) has zero hits
+because CPA3/TPSAB1/TPSB2/MS4A2/CTSG aren't in the shortlist. So the
+overall fraction is 1/13 ≈ 7.7%, well below the 50% threshold, and
+the suggestion never fires.
+**What should happen:** broaden `IMMUNE_MARKER_HINTS` to include the
+HLA-DR/HLA-DP class-II family (HLA-DRA, HLA-DRB1, HLA-DPA1, HLA-DPB1,
+HLA-DRB5, HLA-DQA1, HLA-DQB1, CD74), plasma markers (MZB1, JCHAIN,
+XBP1, IGHG1, IGHA1), mast markers (CPA3, TPSAB1, TPSB2, MS4A2, CTSG,
+KIT), and B-cell-zone markers (CD37). Or — more robust — switch from
+"hits ≥2 in shortlist" to a panel-overlap measure: how well do the
+cluster's top 30 markers overlap each `celltype_broad` group, and
+fire the suggestion when the dominant overlap-group is non-chondrocyte
+for ≥40% of clusters. Either reduces the false-negative rate without
+broadening the false-positive surface.
+**Suspected cause:** `src/scellrun/self_check.py:352-363` — the
+shortlist captures the textbook scanpy-tutorial PBMC marker set but
+not the markers that show up in subchondral bone or synovium scRNA.
+**Fix:** safe but non-trivial. The list-broadening fix is one
+diff-line; the overlap-based fix is the right design but requires
+adding `celltype_broad` access into `annotate_self_check` and writing
+a small panel-overlap helper. Defer to maintainer — the fix touches
+self-check thresholding and the v1.0 demo is honest about the
+behavior (the agent-demo dialogue calls it out explicitly), so the
+silent-wrongness risk is bounded.
+
+## [#013] Fortify install-channel fallback: tuna mirror lagged behind PyPI for v0.9.1
+
+**Stage:** install
+**Severity:** P3 (one-time, mirror-side)
+**Reproducer:** on the hospital server (which uses tuna pypi mirror in
+its global pip config), `pip install --upgrade scellrun` immediately
+after the v0.9.1 PyPI release returned scellrun-0.9.0; had to override
+with `--index-url https://pypi.org/simple/` to actually get 0.9.1.
+**What happened:** tsinghua tuna mirror sync lag is normal (~1 hour
+per release), so a fresh-release "pip install scellrun" on a
+mirror-configured Linux box silently installs the previous version.
+For v1.0 release-day, this matters — agents reading the SKILL.md will
+default to "pip install --upgrade" and get the wrong version.
+**What should happen:** SKILL.md (or the analyze CLI itself) should
+print the installed version + a "newer available on PyPI" hint when
+mismatched. Or — simpler — the install instruction in
+docs/quickstart.md mentions `--index-url https://pypi.org/simple/` for
+freshly-released versions when behind a mirror.
+**Fix:** safe documentation-only — added to docs/quickstart.md as part
+of v1.0. No code change needed.
