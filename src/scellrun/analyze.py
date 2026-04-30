@@ -561,8 +561,14 @@ def run_analyze(
                     ),
                 )
             try:
+                # Auto-fix retry preserves the first-pass self-check rows;
+                # truncate_decisions=False keeps them visible in the log.
                 qc_out = _resolve_stage_dir(
-                    run_dir, "qc", force=True, attempt_id=attempt_id
+                    run_dir,
+                    "qc",
+                    force=True,
+                    attempt_id=attempt_id,
+                    truncate_decisions=False,
                 )
                 adata = ad.read_h5ad(h5ad)
                 qc_result = run_qc(
@@ -740,7 +746,11 @@ def run_analyze(
                 )
             try:
                 integ_out = _resolve_stage_dir(
-                    run_dir, "integrate", force=True, attempt_id=attempt_id
+                    run_dir,
+                    "integrate",
+                    force=True,
+                    attempt_id=attempt_id,
+                    truncate_decisions=False,
                 )
                 qc_adata = ad.read_h5ad(qc_h5ad_path)
                 resolutions_source = (
@@ -1043,7 +1053,11 @@ def run_analyze(
                 )
             try:
                 annot_out = _resolve_stage_dir(
-                    run_dir, "annotate", force=True, attempt_id=attempt_id
+                    run_dir,
+                    "annotate",
+                    force=True,
+                    attempt_id=attempt_id,
+                    truncate_decisions=False,
                 )
                 annot_adata = ad.read_h5ad(integrated_h5ad_path)
                 annot_result = run_annotate(
@@ -1147,6 +1161,7 @@ def _resolve_stage_dir(
     *,
     force: bool,
     attempt_id: str,
+    truncate_decisions: bool | None = None,
 ) -> Path:
     """
     Stage-dir resolution that handles auto-resume on incomplete prior runs.
@@ -1159,7 +1174,13 @@ def _resolve_stage_dir(
 
     For complete prior runs (report.html present), behavior is unchanged:
     StageOutputExists fires and the caller wraps it in StageFailure.
+
+    `truncate_decisions` defaults to `force` — pass False explicitly when
+    an internal retry (auto-fix) wants to preserve the trigger/suggest
+    rows from the first pass.
     """
+    if truncate_decisions is None:
+        truncate_decisions = force
     sub = run_dir / STAGE_DIRS[stage]
     if not force and sub.exists():
         sentinel = sub / ("index.html" if stage == "report" else "report.html")
@@ -1181,11 +1202,15 @@ def _resolve_stage_dir(
                 ),
             )
             try:
-                return stage_dir(run_dir, stage, force=True)
+                return stage_dir(
+                    run_dir, stage, force=True, truncate_decisions=truncate_decisions
+                )
             except StageOutputExists as e:
                 raise StageFailure(stage, e) from None
     try:
-        return stage_dir(run_dir, stage, force=force)
+        return stage_dir(
+            run_dir, stage, force=force, truncate_decisions=truncate_decisions
+        )
     except StageOutputExists as e:
         raise StageFailure(stage, e) from None
 

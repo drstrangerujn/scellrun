@@ -42,7 +42,13 @@ class StageOutputExists(FileExistsError):
     """Raised when a stage subdir already contains artifacts (and --force not set)."""
 
 
-def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
+def stage_dir(
+    run_dir: Path,
+    stage: str,
+    *,
+    force: bool = False,
+    truncate_decisions: bool | None = None,
+) -> Path:
     """
     Resolve and create the stage subdirectory.
 
@@ -51,12 +57,15 @@ def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
     where re-running a stage into the same run-dir leaves the manifest
     showing two runs but only the latest payload on disk.
 
-    When `force=True` we also truncate the matching ``stage`` rows in
-    ``00_decisions.jsonl``. The artifact dir is overwritten on disk; the
-    decision log was previously left untouched, so each re-run appended a
-    second batch of qc.profile / qc.max_pct_mt / etc. rows. Truncating
-    keeps the log honest: one stage = one set of decisions per active
-    attempt.
+    When `truncate_decisions=True` we also drop the matching ``stage``
+    rows from ``00_decisions.jsonl``. This is the user-facing `--force`
+    semantics: the user re-ran the stage from scratch, so prior decisions
+    don't accumulate. Internal retries (the v0.8 auto-fix path) pass
+    `truncate_decisions=False` so the trigger/suggest rows that PROMPTED
+    the retry survive in the log alongside the retry's fresh decisions.
+
+    By default, ``truncate_decisions`` follows ``force`` — so any
+    pre-v0.9.1 callsite that passed `force=True` keeps its old behavior.
 
     Note: stage_dir does NOT physically remove existing files in the
     subdir; the caller's writers overwrite specific paths. Stale files
@@ -64,6 +73,8 @@ def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
     """
     if stage not in STAGE_DIRS:
         raise ValueError(f"unknown stage {stage!r}; expected one of {list(STAGE_DIRS)}")
+    if truncate_decisions is None:
+        truncate_decisions = force
     p = run_dir / STAGE_DIRS[stage]
     if p.exists():
         existing = [f for f in p.iterdir() if not f.name.startswith(".")]
@@ -73,7 +84,7 @@ def stage_dir(run_dir: Path, stage: str, *, force: bool = False) -> Path:
                 "Re-run with --force to overwrite, or pick a fresh --run-dir."
             )
     p.mkdir(parents=True, exist_ok=True)
-    if force:
+    if truncate_decisions:
         # Drop any prior decisions logged under this stage so reruns don't
         # double-count them in the report. Imported lazily to avoid a
         # circular import at module load time.

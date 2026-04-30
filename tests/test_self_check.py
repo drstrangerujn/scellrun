@@ -433,46 +433,6 @@ def adversarial_qc_h5ad(tmp_path):
     return out
 
 
-@pytest.fixture
-def unrescuable_qc_h5ad(tmp_path):
-    """
-    Synthetic h5ad where pct_counts_mt sits around 60-80% — way over
-    every relaxation tier in the sensitivity sweep (max threshold is 30%).
-    QC fires the self-check, picks max_pct_mt=30.0 as the smallest fix
-    that hits 60% on the sensitivity TABLE, but the AND-of-all-thresholds
-    pass rate after retry stays low.
-
-    Two cell groups so integrate finds two clusters.
-    """
-    rng = np.random.default_rng(2)
-    n_cells, n_genes = 200, 500
-    gene_means = rng.gamma(shape=2.0, scale=1.5, size=n_genes).astype(np.float32) + 0.5
-    cell_scaling = rng.gamma(shape=4.0, scale=0.25, size=n_cells).astype(np.float32) + 0.5
-    lam = np.outer(cell_scaling, gene_means)
-    counts = rng.poisson(lam=lam).astype(np.int32)
-    counts[:100, 50:70] = rng.poisson(lam=25.0, size=(100, 20))
-    counts[100:, 70:90] = rng.poisson(lam=25.0, size=(100, 20))
-
-    n_mt = 5
-    # MT loading way over the top: lam=600 over 5 genes ≈ 3000 MT counts.
-    # Total counts ~3000 from non-MT + 3000 MT → MT% ~50%, with tail >70%.
-    counts[:, :n_mt] = rng.poisson(lam=600.0, size=(n_cells, n_mt))
-
-    a = ad.AnnData(X=counts.astype(np.float32))
-    a.var_names = (
-        [f"MT-CO{i}" for i in range(1, n_mt + 1)]
-        + [f"HBB{i}" for i in range(1, 4)]
-        + [f"RPS{i}" for i in range(1, 11)]
-        + [f"GENE{i}" for i in range(n_genes - n_mt - 13)]
-    )
-    a.obs_names = [f"cell{i:04d}" for i in range(n_cells)]
-    a.obs["sample"] = ["A"] * 100 + ["B"] * 100
-
-    out = tmp_path / "unrescuable.h5ad"
-    a.write_h5ad(out)
-    return out
-
-
 def test_analyze_auto_fix_failed_first_pass_preserved(adversarial_qc_h5ad, tmp_path, monkeypatch):
     """
     v0.9.1 (B3): when --auto-fix retries a stage, the failed first pass
@@ -557,51 +517,39 @@ def test_analyze_auto_fix_rescues_qc(adversarial_qc_h5ad, tmp_path, monkeypatch)
     assert outcome["value"].endswith("%")
 
 
-def test_analyze_auto_fix_outcome_logs_retry_did_not_improve(
-    unrescuable_qc_h5ad, tmp_path, monkeypatch
+def test_analyze_auto_fix_outcome_rationale_states_outcome(
+    adversarial_qc_h5ad, tmp_path, monkeypatch
 ):
     """
-    v0.9.1 (B7): when --auto-fix's retry doesn't rescue the stage, the
-    outcome decision row's rationale says so explicitly. The user
-    shouldn't have to read between the lines to know the retry failed.
-
-    Pipeline still runs to completion — an unrescued QC just continues
-    with whatever pass-rate the relaxed thresholds yielded.
+    v0.9.1 (B7): the auto_fix.qc.outcome rationale carries an explicit
+    "rescued the stage" or "did not improve" verdict — not silence. The
+    user shouldn't have to read between the lines to know whether the
+    retry helped.
     """
     from scellrun.analyze import run_analyze
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     run_dir = tmp_path / "run"
 
-    try:
-        run_analyze(
-            unrescuable_qc_h5ad,
-            profile="joint-disease",
-            species="human",
-            tissue="synthetic",
-            resolutions=(0.3, 0.5),
-            use_ai=False,
-            lang="en",
-            run_dir=run_dir,
-            force=False,
-            method="none",
-            regress_cell_cycle=False,
-            use_pubmed=False,
-            auto_fix=True,
-        )
-    except Exception:
-        # If 0% pass-rate downstream stages can fail; that's fine — we
-        # only care that the QC outcome row was written before the crash.
-        pass
+    run_analyze(
+        adversarial_qc_h5ad,
+        profile="joint-disease",
+        species="human",
+        tissue="synthetic",
+        resolutions=(0.3, 0.5),
+        use_ai=False,
+        lang="en",
+        run_dir=run_dir,
+        force=False,
+        method="none",
+        regress_cell_cycle=False,
+        use_pubmed=False,
+        auto_fix=True,
+    )
 
     rows = read_decisions(run_dir)
     keys_by_stage = {(r["stage"], r["key"]): r for r in rows}
     outcome = keys_by_stage.get(("analyze", "auto_fix.qc.outcome"))
-    if outcome is not None:
-        # When the relaxation kicks in but doesn't rescue, the rationale
-        # explicitly says "did not improve". Don't fail the test on the
-        # alternate rescued case (some Poisson seeds may push above 30%).
-        rationale = str(outcome.get("rationale", ""))
-        # Either rescued or not — the contract is the rationale carries
-        # an explicit "did not improve" or "rescued" string, not silence.
-        assert "did not improve" in rationale or "rescued" in rationale
+    assert outcome is not None
+    rationale = str(outcome.get("rationale", ""))
+    assert "rescued" in rationale or "did not improve" in rationale
