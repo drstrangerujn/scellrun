@@ -124,21 +124,18 @@ def run_analyze(
 
     from scellrun.profiles import load as load_profile
     from scellrun.report import build_report
-    from scellrun.scrna.annotate import (
-        run_annotate,
-        write_artifacts as write_annotate_artifacts,
-    )
+    from scellrun.scrna.annotate import run_annotate
+    from scellrun.scrna.annotate import write_artifacts as write_annotate_artifacts
     from scellrun.scrna.integrate import (
         AIO_FULL_RESOLUTIONS,
         DEFAULT_RESOLUTIONS,
         run_integrate,
-        write_artifacts as write_integrate_artifacts,
     )
-    from scellrun.scrna.markers import (
-        run_markers,
-        write_artifacts as write_markers_artifacts,
-    )
-    from scellrun.scrna.qc import run_qc, write_artifacts as write_qc_artifacts
+    from scellrun.scrna.integrate import write_artifacts as write_integrate_artifacts
+    from scellrun.scrna.markers import run_markers
+    from scellrun.scrna.markers import write_artifacts as write_markers_artifacts
+    from scellrun.scrna.qc import run_qc
+    from scellrun.scrna.qc import write_artifacts as write_qc_artifacts
 
     def _say(msg: str) -> None:
         if on_progress is not None:
@@ -279,7 +276,7 @@ def run_analyze(
     try:
         markers_adata = ad.read_h5ad(integrated_h5ad_path)
         markers_result, per_res_df = run_markers(markers_adata)
-        markers_artifacts = write_markers_artifacts(
+        write_markers_artifacts(
             markers_result, per_res_df, markers_out, lang=lang
         )
     except Exception as e:
