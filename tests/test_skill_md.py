@@ -127,3 +127,73 @@ def test_environment_hygiene_subsections(skill_text: str, subsection: str) -> No
     assert re.search(pattern, skill_text, flags=re.MULTILINE) is not None, (
         f"SKILL.md must contain an H3 subsection starting with {subsection!r} under Environment hygiene"
     )
+
+
+# v1.1.2 additions: top-of-doc version-check ritual, expanded
+# When-NOT-to-use boundary cases, four more Environment-hygiene
+# subsections, profile-generic glossary structure.
+
+
+def test_has_version_compatibility_check_section(skill_text: str) -> None:
+    """v1.1.2 must carry a 'Version compatibility check' H2 placed near the top so the agent runs it BEFORE any scellrun command."""
+    assert re.search(
+        r"^##\s+Version compatibility check",
+        skill_text,
+        flags=re.MULTILINE,
+    ) is not None, "SKILL.md must contain an H2 section starting with 'Version compatibility check'"
+
+
+@pytest.mark.parametrize(
+    "needle",
+    [
+        "multimodal",
+        "already integrated",
+        "missing raw counts",
+    ],
+)
+def test_when_not_to_use_boundary_cases(skill_text: str, needle: str) -> None:
+    """v1.1.2 expands When-NOT-to-use with explicit multimodal / already-integrated / raw-count boundary cases."""
+    # Locate the When-NOT-to-use section and the next H2 (its end).
+    start_match = re.search(
+        r"^##\s+When NOT to use scellrun\s*$", skill_text, flags=re.MULTILINE
+    )
+    assert start_match is not None, "When-NOT-to-use section missing (precondition)"
+    section_start = start_match.end()
+    next_h2 = re.search(r"^##\s+", skill_text[section_start:], flags=re.MULTILINE)
+    section_end = section_start + next_h2.start() if next_h2 else len(skill_text)
+    section_text = skill_text[section_start:section_end].lower()
+    assert needle.lower() in section_text, (
+        f"'When NOT to use scellrun' section must mention {needle!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "subsection",
+    [
+        "Long-running remote jobs",
+        "Disk space and run-dir naming",
+        "Resume / inspect a half-finished run",
+        "Secret handling",
+    ],
+)
+def test_environment_hygiene_v112_subsections(skill_text: str, subsection: str) -> None:
+    """v1.1.2 adds four operational H3 subsections under Environment hygiene; each must be present."""
+    pattern = rf"^###\s+{re.escape(subsection)}"
+    assert re.search(pattern, skill_text, flags=re.MULTILINE) is not None, (
+        f"SKILL.md must contain an H3 subsection starting with {subsection!r}"
+    )
+
+
+def test_profile_specific_glossaries_section(skill_text: str) -> None:
+    """v1.1.2 renames the chondrocyte glossary H2 to a profile-generic 'Profile-specific glossaries' container so future profiles slot in cleanly."""
+    assert re.search(
+        r"^##\s+Profile-specific glossaries\s*$",
+        skill_text,
+        flags=re.MULTILINE,
+    ) is not None, "SKILL.md must contain an H2 section titled 'Profile-specific glossaries'"
+    # And the chondrocyte panel must now sit under it as an H3.
+    assert re.search(
+        r"^###\s+`chondrocyte_markers`",
+        skill_text,
+        flags=re.MULTILINE,
+    ) is not None, "Profile-specific glossaries must contain an H3 subsection for `chondrocyte_markers`"

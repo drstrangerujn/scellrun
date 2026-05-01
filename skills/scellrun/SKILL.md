@@ -1,8 +1,8 @@
 ---
 name: scellrun
 description: Opinionated, report-first single-cell + multi-omics analysis CLI. Use when the user asks anything that involves an .h5ad / 10x mtx / cellranger output. Default to `scellrun analyze` for end-to-end work; reach for individual stage commands only when the user explicitly wants partial work or fine control.
-min_scellrun_version: "1.1.0"
-tested_against_version: "1.1.0"
+min_scellrun_version: "1.1.2"
+tested_against_version: "1.1.2"
 schema_version: 1
 ---
 
@@ -22,20 +22,34 @@ reaching for scellrun, not writing scanpy boilerplate.
 
 ## Verification status
 
-This document was last validated against scellrun v1.1.0 on 2026-04-30.
+This document was last validated against scellrun v1.1.2 on 2026-04-30.
 The reference end-to-end behavior is captured in `docs/agent-demo.md`
 at the repo root, which is a real run on real OA cartilage data. If
 you (the agent) reach a different conclusion from what's in
 agent-demo.md on the same input, ASSUME this document is stale, not
 that you're wrong; tell the user to check the repo for updates.
 
-When you (the agent) load this skill, run `scellrun --version` and
-compare against `tested_against_version` above. If the installed
-version is newer than `tested_against_version`, the skill MAY describe
-outdated behavior — surface a warning to the user and proceed
-cautiously. If the installed version is older than
-`min_scellrun_version`, refuse to act on this skill and tell the user
-to upgrade.
+## Version compatibility check (run this BEFORE any scellrun command)
+
+Before issuing a single scellrun command, verify the installed version
+is within the range this skill was tested against:
+
+```bash
+scellrun --version
+```
+
+Compare against the frontmatter at the top of this file:
+
+- If `installed >= min_scellrun_version` AND `installed <= tested_against_version`: proceed.
+- If `installed > tested_against_version`: **proceed cautiously, surface
+  a warning to the user.** Trigger codes, decision keys, and CLI flag
+  names may have changed; rely on the actual decision-log output
+  (which is self-describing) over what this skill says about specific keys.
+- If `installed < min_scellrun_version`: **refuse to act on this skill.**
+  Tell the user `pip install --upgrade scellrun` and re-run.
+
+This check is the agent's responsibility because the skill loader
+typically caches the doc at startup; a stale skill cannot fix itself.
 
 ## Decision tree: which command for which intent
 
@@ -61,10 +75,35 @@ for something else when:
   scellrun in. If the user wants a Seurat ↔ Python bridge, point at
   `anndata2ri` or `sceasy`, not scellrun.
 - **The data is not 10x mtx / cellranger / loom / csv / h5ad.** Raw
-  fastq files need cellranger or starsolo first. Spatial
-  transcriptomics, ATAC-seq, multi-modal CITE-seq are out of scope.
-  scellrun's `convert` subcommand covers post-cellranger inputs;
-  pre-alignment is not on the menu.
+  fastq files need cellranger or starsolo first. scellrun's `convert`
+  subcommand covers post-cellranger inputs; pre-alignment is not on
+  the menu.
+- **The data is multimodal (ADT, ATAC, CITE-seq, spatial).** scellrun's
+  frontmatter advertises "multi-omics" but the v1.1 body is scRNA-only.
+  Multi-modal AnnData (with `obsm['protein']` etc.) will mostly run,
+  but the QC + integration + annotation pipeline ignores anything
+  outside the gene-expression layer. Use scvi-tools / multivi /
+  SCANPY's MuData ecosystem instead. scellrun multi-omics support is
+  a roadmap item, not a current feature.
+- **The data is already integrated and the user wants to continue from
+  there.** scellrun's `analyze` is a fresh-start orchestrator; it
+  converts → QCs → integrates → markers → annotates from scratch. If
+  the user has an `integrated.h5ad` from someone else's pipeline
+  (Harmony already applied, batch correction done, clusters labeled),
+  DO NOT run `analyze`. Run individual stages as needed (`scrna
+  markers`, `scrna annotate`) on the input directly, or tell the user
+  scellrun isn't the right wrapper for "continue from here". Forcing
+  a fresh integration overwrites the existing work and confuses
+  provenance.
+- **The expression matrix is missing raw counts entirely.** scellrun
+  stores `.raw` for downstream `rank_genes_groups`. If the user's
+  h5ad has only log-normalized data (no `.raw` set, no
+  `layers['counts']`), the `markers` stage will silently use scaled X
+  and the log2fc numbers will be in wrong units. The QC-stage
+  raw-counts heuristic catches this when it's the only matrix, but
+  does nothing when `.raw` is empty. Before invoking analyze,
+  sanity-check `adata.raw is None and 'counts' not in adata.layers`
+  and refuse if both are true.
 - **The user wants non-standard analysis.** Custom marker calling
   outside the panel-overlap pattern, novel normalization (SCT,
   sctransform), trajectory inference (RNA velocity, CellRank,
@@ -149,7 +188,8 @@ see in v0.9.1+):
 {"schema_version":1,"stage":"analyze","key":"method_downgrade","value":"none","default":"harmony","source":"auto","rationale":"no sample/batch column (orig.ident/sample/batch/donor) in obs — single-sample input; auto-downgraded --method from harmony to none. Pass --method harmony explicitly to force the original behavior.","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:46:01+00:00"}
 {"schema_version":1,"stage":"integrate","key":"sample_key","value":"orig.ident","default":null,"source":"auto","rationale":"auto-detected from obs columns (orig.ident / sample / batch / donor priority)","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:46:12+00:00"}
 {"schema_version":1,"stage":"integrate","key":"resolution_recommended","value":0.5,"default":null,"source":"ai","rationale":"LLM picked 0.5 from the sweep — best separation of chondrocyte subtypes vs over-splitting at 0.8","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:48:01+00:00"}
-{"schema_version":1,"stage":"annotate","key":"panel_name","value":"chondrocyte_markers","default":null,"source":"auto","rationale":"profile joint-disease ships chondrocyte_markers; auto-picked over celltype_broad because chondrocyte hits dominate the top markers","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:49:33+00:00"}
+{"schema_version":1,"stage":"analyze","key":"annotate.auto_panel","value":"chondrocyte_markers","default":null,"source":"auto","rationale":"kept chondrocyte_markers: chondrocyte_hits=10, broad_hits=3; cleared the >=1.5x margin","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:49:30+00:00"}
+{"schema_version":1,"stage":"annotate","key":"panel","value":"chondrocyte_markers","default":null,"source":"auto","rationale":"orchestrator-injected panel 'chondrocyte_markers' (auto-pick or self-check fix)","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:49:33+00:00"}
 {"schema_version":1,"stage":"qc","key":"self_check.qc_low_pass_rate.trigger","value":"qc_low_pass_rate","default":null,"source":"auto","rationale":"only 44.3% of cells passed QC (1108/2500); below the 60% trigger threshold","fix_payload":null,"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
 {"schema_version":1,"stage":"qc","key":"self_check.qc_low_pass_rate.suggest","value":"raise --max-pct-mt to 25.0","default":null,"source":"auto","rationale":"raising --max-pct-mt from 20 to 25 would let 62% of cells pass that single test (sensitivity sweep, smallest relaxation reaching 60%)","fix_payload":{"max_pct_mt":25.0},"attempt_id":"a1b2c3d4e5f6a7b8","ts":"2026-04-30T09:45:30+00:00"}
 ```
@@ -292,7 +332,7 @@ not default to `default` and let the broad panel run when a tissue-
 specific profile exists. If the user's tissue has no matching profile,
 use `default` and tell them — adding a profile is a one-PR contribution.
 
-### Panel auto-selection inside `joint-disease` (v1.1.0)
+### Panel auto-selection inside `joint-disease` (v1.1.0+)
 
 The `joint-disease` profile ships two annotation panels: the Fan 2024
 `chondrocyte_markers` (11 chondrocyte subtypes) and a broad
@@ -317,19 +357,31 @@ What this means for you (the agent):
 - `--profile joint-disease` is safe to use even when the dataset turns
   out to be immune-rich (subchondral bone, synovium, fluid). scellrun
   will swap panels rather than blindly run the chondrocyte panel.
-- The decision log row `analyze.annotate.auto_panel` records which
-  panel was picked AND the rationale, with the cluster-level hit counts.
-  For a swap you'll see something like: `value=celltype_broad`,
-  `rationale="swapped to celltype_broad: chondrocyte_hits=2,
-  broad_hits=9; required >=1.5x margin to keep chondrocyte panel."`
-  For the chondrocyte default: `value=chondrocyte_markers`,
-  `rationale="kept chondrocyte_markers: chondrocyte_hits=10,
-  broad_hits=3; cleared the >=1.5x margin..."`.
+- Two related decision-log rows record this. Both are real, both
+  matter, do not conflate them:
+  - `stage="analyze"`, `key="annotate.auto_panel"` — the orchestrator's
+    auto-pick step, with the cluster-level hit counts in the rationale.
+    For a swap: `value=celltype_broad`,
+    `rationale="swapped to celltype_broad: chondrocyte_hits=2,
+    broad_hits=9; required >=1.5x margin to keep chondrocyte panel."`
+    For the chondrocyte default: `value=chondrocyte_markers`,
+    `rationale="kept chondrocyte_markers: chondrocyte_hits=10,
+    broad_hits=3; cleared the >=1.5x margin..."`.
+  - `stage="annotate"`, `key="panel"` — the per-stage record of which
+    panel `run_annotate` actually matched against. `source="auto"`
+    when the orchestrator (or a self-check fix) injected the name,
+    `source="user"` when the per-stage CLI got `--panel` on argv.
+    See the next subsection for the source-attribution rules.
 - If you (the agent) want to override the auto-pick, pass `--panel
   chondrocyte_markers` or `--panel celltype_broad` to the per-stage
-  `scrna annotate` command. This shows up as a `source="user"` row.
+  `scrna annotate` command. This shows up as a `source="user"` row
+  on `annotate.panel`.
+- (`panel_name` is NOT a decision-log key. It appears only inside
+  self-check `fix_payload` dicts as the structured-fix shape, e.g.
+  `{"panel_name": "celltype_broad"}`. The decision-log row that the
+  fix lands in is still `annotate.panel`.)
 
-### `source="user"` vs `source="auto"` on `annotate.panel` (v1.1.0)
+### `source="user"` vs `source="auto"` on `annotate.panel` (v1.1.0+)
 
 Pre-1.1.0 had a footgun: when `analyze` orchestrated the pipeline and
 the auto-pick (or a self-check fix) selected a panel name, the value
@@ -352,7 +404,14 @@ back honestly. If you see `source="auto"`, this was scellrun's own pick
 (auto-pick at the orchestrator level, or a self-check `--auto-fix`
 retry); say "scellrun auto-picked..." not "you overrode...".
 
-## Glossary: chondrocyte panel labels
+## Profile-specific glossaries
+
+Each profile that ships a marker panel adds its own glossary subsection
+here. Other profiles will add their own glossary subsections when they
+ship; until then, the agent should treat this section as
+joint-disease-specific.
+
+### `chondrocyte_markers` (Fan 2024) — joint-disease profile
 
 The `joint-disease` profile's `chondrocyte_markers` panel is the Fan 2024
 human articular cartilage 11-subtype taxonomy. When the agent quotes one
@@ -501,6 +560,64 @@ file the user opens.
   surface the report when it's ready"). That gives the user something
   to reference if the connection drops or the agent times out before
   the run completes.
+
+### Long-running remote jobs (tmux / nohup / scheduler)
+
+- A `scellrun analyze` on a real cohort takes 5-30 min on a workstation,
+  longer on integration-heavy multi-sample. SSH disconnects mid-run
+  kill the job.
+- Default: wrap the command in `tmux` or `screen`. Pattern:
+  ```bash
+  ssh <host>
+  tmux new -s scellrun-<userid>
+  conda activate scellrun-<userid> && scellrun analyze ... 2>&1 | tee run.log
+  # detach: Ctrl-b d. Reattach: tmux attach -t scellrun-<userid>
+  ```
+- If the cluster has SLURM / PBS / LSF, prefer a job submission script
+  over a foreground tmux. Surface to the user that this is the option;
+  don't insist on tmux.
+- Capture stdout AND stderr to a log file (`2>&1 | tee run.log`) —
+  scellrun's per-stage progress logs are how you debug a long run, and
+  the run-dir's report.html only renders post-hoc.
+
+### Disk space and run-dir naming
+
+- A typical run-dir for a 10k-cell sample is 50-200 MB; for a 100k-cell
+  multi-sample integrate, 1-3 GB (the integrated.h5ad + UMAP grids
+  dominate).
+- Default run-dir is `./scellrun_out/run-YYYYMMDD-HHMMSS/`. For
+  multi-project users, override with `--run-dir
+  my-project/2026-05-OA-pilot/` to keep things organized.
+- The `.failed-N/` directories from `--auto-fix` retries can double
+  disk use. Surface to the user before they fill /tmp.
+
+### Resume / inspect a half-finished run
+
+- If `analyze` died mid-pipeline, the run-dir has the partial stages.
+  v0.9.1+ auto-resumes incomplete prior runs without `--force`.
+- To inspect: open `<run-dir>/00_run.json` (manifest) and
+  `00_decisions.jsonl` (what scellrun decided so far). The last stage
+  that completed has its report; failed-mid-stage will be empty or
+  partial.
+- Don't `rm -rf` the run-dir to "start clean" without checking first —
+  the user may want the failed artifacts for debugging. Use a fresh
+  run-dir name instead.
+
+### Secret handling (Anthropic API key + others)
+
+- scellrun's `--ai` paths read `ANTHROPIC_API_KEY` from environment.
+  The default agent action of `export ANTHROPIC_API_KEY=...` in shell
+  history leaks the key into `~/.bash_history`.
+- Patterns:
+  - For interactive debugging: prefix the command, e.g.
+    `ANTHROPIC_API_KEY=sk-... scellrun analyze ...`. Bash discards
+    prefix-vars from history with `HISTCONTROL=ignoreboth`.
+  - For automation: write the key to `~/.config/scellrun/.env` (mode
+    600) and `source` it before invocation.
+  - Never commit a key, never paste a key into chat with the user.
+- If no key is set, `--no-ai` works. The deterministic pipeline runs
+  fully; the LLM second opinions are skipped (which is fine for most
+  analyses).
 
 ## Hard rules for the agent (don't break these)
 
