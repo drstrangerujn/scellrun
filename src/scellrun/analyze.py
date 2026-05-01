@@ -404,6 +404,7 @@ def run_analyze(
     from scellrun.scrna.markers import write_artifacts as write_markers_artifacts
     from scellrun.scrna.qc import run_qc
     from scellrun.scrna.qc import write_artifacts as write_qc_artifacts
+    from scellrun.views import build_views
 
     def _say(msg: str) -> None:
         if on_progress is not None:
@@ -1174,6 +1175,27 @@ def run_analyze(
     report_summary = f"[5/5] report: {report_index}"
     _say(report_summary)
     stages_completed.append("report")
+
+    # ---- v1.2.0: views layer (best-effort; pure HTML index over the
+    # existing stage artifacts). Failures here don't break the pipeline
+    # because the canonical 05_report/index.html is already on disk.
+    try:
+        views_artifacts = build_views(run_dir)
+    except Exception as e:
+        views_artifacts = {}
+        _say(f"[5/5] views: skipped — {type(e).__name__}: {e}")
+    else:
+        write_run_meta(
+            run_dir,
+            command="analyze:views",
+            params={
+                "out_dir": run_dir / STAGE_DIRS["views"],
+                "n_views": len(views_artifacts),
+                "attempt_id": attempt_id,
+            },
+        )
+        if "index" in views_artifacts:
+            _say(f"[5/5] views: {views_artifacts['index']}")
 
     return AnalyzeResult(
         run_dir=run_dir,

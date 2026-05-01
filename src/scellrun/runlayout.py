@@ -30,6 +30,7 @@ STAGE_DIRS = {
     "markers": "03_markers",
     "annotate": "04_annotate",
     "report": "05_report",
+    "views": "06_views",
 }
 
 

@@ -1,8 +1,8 @@
 ---
 name: scellrun
 description: Opinionated, report-first single-cell + multi-omics analysis CLI. Use when the user asks anything that involves an .h5ad / 10x mtx / cellranger output. Default to `scellrun analyze` for end-to-end work; reach for individual stage commands only when the user explicitly wants partial work or fine control.
-min_scellrun_version: "1.1.2"
-tested_against_version: "1.1.2"
+min_scellrun_version: "1.2.0"
+tested_against_version: "1.2.0"
 schema_version: 1
 ---
 
@@ -22,12 +22,19 @@ reaching for scellrun, not writing scanpy boilerplate.
 
 ## Verification status
 
-This document was last validated against scellrun v1.1.2 on 2026-04-30.
+This document was last validated against scellrun v1.2.0 on 2026-04-30.
 The reference end-to-end behavior is captured in `docs/agent-demo.md`
 at the repo root, which is a real run on real OA cartilage data. If
 you (the agent) reach a different conclusion from what's in
 agent-demo.md on the same input, ASSUME this document is stale, not
 that you're wrong; tell the user to check the repo for updates.
+
+v1.2.0 adds three cross-disease profiles (`tumor`, `brain`, `kidney`)
+and a new `06_views/` HTML index layer beside `05_report/` (by
+resolution / by cluster / by decision source). The cross-disease
+profiles ship `celltype_broad` panels only — fine-subtype taxonomies
+remain a joint-disease-only feature pending dedicated cold-validation
+runs.
 
 ## Version compatibility check (run this BEFORE any scellrun command)
 
@@ -321,11 +328,27 @@ scellrun profiles show joint-disease
 Available profiles ship with the package; pick by tissue, not by guess:
 
 - `default` — fresh-tissue 10x v3, human, mt% ≤ 20, hb% ≤ 5. Use for
-  PBMC, tumor, brain, anything not joint-tissue.
+  PBMC or any tissue without a dedicated profile. (Pre-1.2.0 this was
+  the catch-all for tumor / brain / kidney too; with 1.2.0's profiles
+  shipped, prefer the tissue-specific one.)
 - `joint-disease` — same plus hb% ≤ 2 (cartilage is avascular) and the
   Fan 2024 11-subtype chondrocyte panel + a 15-group broad cell-type
   panel. Use when the user mentions cartilage, synovium, subchondral
   bone, OA, RA, or "joint" in any form.
+- `tumor` (v1.2.0) — pan-cancer / TME panel (TAMs, CAFs, T/B/NK/plasma,
+  endothelial, neutrophils, plus a proliferation-marker proxy for
+  malignant cells). Default thresholds. Use for any tumor scRNA without
+  a more specific cancer-type profile. No fine-subtype panel — malignant
+  cell substructure is disease-specific (run inferCNV or a dedicated
+  panel when needed).
+- `brain` (v1.2.0) — cortical / hippocampal panel from Tasic 2018 /
+  Hodge 2019 (excitatory + GABAergic neurons with PV/SST/VIP/LAMP5
+  interneurons broken out, oligo lineage, astrocytes, microglia,
+  vasculature). Tightens mt% to 10. Use for fresh brain scRNA / snRNA.
+- `kidney` (v1.2.0) — KPMP / Stewart 2019 nephron + vascular + immune
+  panel (PT, DT, TAL, CD principal/intercalated, podocytes, parietal,
+  endothelial, mesangial, broad immune). Tightens mt% to 15. Use for
+  kidney biopsy scRNA / snRNA.
 
 If the user mentions a tissue keyword, pick the matching profile. Do
 not default to `default` and let the broad panel run when a tissue-
@@ -407,9 +430,13 @@ retry); say "scellrun auto-picked..." not "you overrode...".
 ## Profile-specific glossaries
 
 Each profile that ships a marker panel adds its own glossary subsection
-here. Other profiles will add their own glossary subsections when they
-ship; until then, the agent should treat this section as
-joint-disease-specific.
+here. The v1.2.0 cross-disease profiles (`tumor`, `brain`, `kidney`)
+ship `celltype_broad` panels but no fine-subtype glossaries yet — the
+panel labels for those profiles are self-explanatory English ("Tumor-
+associated macrophages", "Excitatory neurons", "Proximal tubule" etc.)
+and don't need a label-decode table. Add a glossary subsection here when
+a future profile ships an abbreviation panel like the Fan 2024
+chondrocyte taxonomy below.
 
 ### `chondrocyte_markers` (Fan 2024) — joint-disease profile
 

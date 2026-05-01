@@ -14,7 +14,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-_REGISTRY: list[str] = ["default", "joint-disease"]
+_REGISTRY: list[str] = ["default", "joint-disease", "tumor", "brain", "kidney"]
 
 
 def _module_name(profile: str) -> str:

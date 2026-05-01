@@ -10,8 +10,9 @@ from scellrun.runlayout import (
 
 
 def test_stage_dirs_have_expected_keys():
-    assert set(STAGE_DIRS) == {"qc", "integrate", "markers", "annotate", "report"}
+    assert set(STAGE_DIRS) == {"qc", "integrate", "markers", "annotate", "report", "views"}
     assert STAGE_DIRS["qc"] == "01_qc"
+    assert STAGE_DIRS["views"] == "06_views"
 
 
 def test_default_run_dir_format():
