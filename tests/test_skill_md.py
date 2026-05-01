@@ -65,7 +65,7 @@ def test_frontmatter_name_and_description(skill_text: str) -> None:
         ".failed-1",
         # v0.9.1 single-sample auto-degrade for the integrate stage.
         "harmony→none",
-        # v1.0 honesty: a "Verification status" section pinning to v1.0.0.
+        # v1.0 honesty: a "Verification status" section pinning to a version.
         "Verification status",
     ],
 )
@@ -80,3 +80,50 @@ def test_body_has_fenced_code_block(skill_text: str) -> None:
     fences = re.findall(r"^```", skill_text, flags=re.MULTILINE)
     # Each block has an opening + closing fence, so we need >= 2 lines.
     assert len(fences) >= 2, "SKILL.md must contain at least one fenced code block"
+
+
+# v1.1.1 additions: version-sync frontmatter, When-NOT-to-use section,
+# expanded Environment hygiene subsections.
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "min_scellrun_version",
+        "tested_against_version",
+        "schema_version",
+    ],
+)
+def test_frontmatter_has_version_sync_keys(skill_text: str, key: str) -> None:
+    """v1.1.1 frontmatter must declare version-sync keys so the agent can compare against the installed CLI."""
+    closing = skill_text.find("\n---\n", 4)
+    assert closing > 0, "SKILL.md frontmatter must close with a '---' line"
+    frontmatter = skill_text[4:closing]
+    pattern = rf"^{re.escape(key)}\s*:\s*\S+"
+    assert re.search(pattern, frontmatter, flags=re.MULTILINE) is not None, (
+        f"frontmatter must declare {key!r} (v1.1.1 version-sync requirement)"
+    )
+
+
+def test_has_when_not_to_use_section(skill_text: str) -> None:
+    """v1.1.1 must carry a 'When NOT to use scellrun' H2 section so the agent knows the tool's edges."""
+    assert re.search(
+        r"^##\s+When NOT to use scellrun\s*$", skill_text, flags=re.MULTILINE
+    ) is not None, "SKILL.md must contain an H2 section titled 'When NOT to use scellrun'"
+
+
+@pytest.mark.parametrize(
+    "subsection",
+    [
+        "Remote-server execution",
+        "Multi-sample analysis",
+        "Auto-fix retry hygiene",
+        "Reporting back to the user",
+    ],
+)
+def test_environment_hygiene_subsections(skill_text: str, subsection: str) -> None:
+    """v1.1.1 expands Environment hygiene with these H3 subsections; each must be present."""
+    pattern = rf"^###\s+{re.escape(subsection)}"
+    assert re.search(pattern, skill_text, flags=re.MULTILINE) is not None, (
+        f"SKILL.md must contain an H3 subsection starting with {subsection!r} under Environment hygiene"
+    )

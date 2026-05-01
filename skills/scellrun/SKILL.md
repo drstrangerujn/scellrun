@@ -1,6 +1,9 @@
 ---
 name: scellrun
 description: Opinionated, report-first single-cell + multi-omics analysis CLI. Use when the user asks anything that involves an .h5ad / 10x mtx / cellranger output. Default to `scellrun analyze` for end-to-end work; reach for individual stage commands only when the user explicitly wants partial work or fine control.
+min_scellrun_version: "1.1.0"
+tested_against_version: "1.1.0"
+schema_version: 1
 ---
 
 # scellrun
@@ -19,12 +22,20 @@ reaching for scellrun, not writing scanpy boilerplate.
 
 ## Verification status
 
-This document was last validated against scellrun v1.0.0 on 2026-04-30.
+This document was last validated against scellrun v1.1.0 on 2026-04-30.
 The reference end-to-end behavior is captured in `docs/agent-demo.md`
 at the repo root, which is a real run on real OA cartilage data. If
 you (the agent) reach a different conclusion from what's in
 agent-demo.md on the same input, ASSUME this document is stale, not
 that you're wrong; tell the user to check the repo for updates.
+
+When you (the agent) load this skill, run `scellrun --version` and
+compare against `tested_against_version` above. If the installed
+version is newer than `tested_against_version`, the skill MAY describe
+outdated behavior — surface a warning to the user and proceed
+cautiously. If the installed version is older than
+`min_scellrun_version`, refuse to act on this skill and tell the user
+to upgrade.
 
 ## Decision tree: which command for which intent
 
@@ -39,6 +50,37 @@ that you're wrong; tell the user to check the repo for updates.
 Default to `scellrun analyze`. Per-stage commands exist for fine control
 (re-running one stage with different thresholds, splitting a long run
 across machines), not as the normal entrypoint.
+
+## When NOT to use scellrun
+
+scellrun is not the right tool for every single-cell question. Reach
+for something else when:
+
+- **The user is mid-stream in a Seurat / R workflow.** scellrun reads
+  h5ad, not Seurat `.rds`. Don't force a re-conversion just to plug
+  scellrun in. If the user wants a Seurat ↔ Python bridge, point at
+  `anndata2ri` or `sceasy`, not scellrun.
+- **The data is not 10x mtx / cellranger / loom / csv / h5ad.** Raw
+  fastq files need cellranger or starsolo first. Spatial
+  transcriptomics, ATAC-seq, multi-modal CITE-seq are out of scope.
+  scellrun's `convert` subcommand covers post-cellranger inputs;
+  pre-alignment is not on the menu.
+- **The user wants non-standard analysis.** Custom marker calling
+  outside the panel-overlap pattern, novel normalization (SCT,
+  sctransform), trajectory inference (RNA velocity, CellRank,
+  Monocle3), spatial neighborhood graphs, etc. Drop into
+  scanpy/anndata directly; scellrun's defaults will fight you.
+- **nf-core or another orchestrator is already running on the same
+  data.** Let it finish, then run scellrun on the resulting h5ad.
+  Don't have two pipelines double-process the same input.
+- **A rare cell type (<10 cells) is the actual point of the analysis.**
+  scellrun's QC + clustering defaults will lump or discard rare
+  populations. Use scanpy with custom thresholds and document the
+  divergence from defaults.
+- **The user explicitly asks for a non-defensible answer.** "Just give
+  me 8 clusters even if the data doesn't support it." Refuse; point
+  at the resolution-quality table the integrate stage produces and
+  why scellrun won't fudge a number it can't justify.
 
 ## The end-to-end one-liner
 
@@ -376,6 +418,89 @@ For LLM-enabled runs, pass `ANTHROPIC_API_KEY` through the env or
 export ANTHROPIC_API_KEY=...
 scellrun analyze data.h5ad --ai
 ```
+
+### Remote-server execution (ssh patterns)
+
+- When the user references "lab server" or "hospital" or hands you a
+  path with no host, ask one clarifying question rather than guessing.
+  Pick the wrong host and you're working on stale or absent data.
+- Run scellrun on the SAME machine where the data lives. Don't pull
+  GBs of cellranger output across the network just so the CLI runs
+  locally; the artifacts (and the report) end up on the wrong side
+  of the link.
+- ssh pattern:
+  ```bash
+  ssh <host> 'bash -lc "conda activate scellrun-<userid> && scellrun analyze ..."'
+  ```
+  The `bash -lc` matters — conda's shell hooks need a login shell to
+  initialize, otherwise `conda activate` is a no-op and `scellrun`
+  resolves to the wrong python.
+- If you (the agent) cannot ssh directly, write the commands the user
+  should paste, and make them copy-pasteable. Don't assume the user
+  knows ssh; spell out `ssh <host>` and the activation step.
+
+### Multi-sample analysis (no auto-merge)
+
+scellrun does NOT auto-merge multiple cellranger output directories.
+v1.1.0 takes one h5ad per `analyze` call.
+
+For a multi-sample study (e.g. `BML_1..5 + NC_1..3`), the canonical
+pattern is convert-each-then-merge-externally:
+
+```bash
+# convert each sample to its own h5ad
+for s in BML_1 BML_2 BML_3 BML_4 BML_5 NC_1 NC_2 NC_3; do
+    scellrun scrna convert path/to/$s -o $s.h5ad
+done
+# then merge into one h5ad with anndata.concat
+python -c "import anndata as ad; \
+    samples = ['BML_1','BML_2','BML_3','BML_4','BML_5','NC_1','NC_2','NC_3']; \
+    adata = ad.concat({s: ad.read_h5ad(f'{s}.h5ad') for s in samples}, label='sample'); \
+    adata.write_h5ad('merged.h5ad')"
+scellrun analyze merged.h5ad --tissue "OA cartilage"
+```
+
+The `obs.sample` column from `ad.concat(label='sample')` is exactly
+the kind of column scellrun's auto-detect `sample_key` looks for
+(priority: `orig.ident` / `sample` / `batch` / `donor`). Harmony will
+fire and integrate batches.
+
+For a single sample (no merge needed), scellrun auto-degrades
+`--method harmony→none` per the v0.9.1 fix; you don't need to detect
+single-sample yourself.
+
+### Auto-fix retry hygiene (cleanup)
+
+When `--auto-fix` runs and rescues a stage, you'll see two directories
+side by side: `<NN_stage>/` (the current good output) AND
+`<NN_stage>.failed-1/` (the original failed attempt). Both are kept.
+
+- Don't delete `.failed-N/` automatically. The user may want to
+  compare the failed and the rescued state for debugging.
+- DO surface the existence of `.failed-N/` to the user. Say something
+  like: "scellrun's QC self-check fired and we retried; the original
+  failed attempt is at `01_qc.failed-1/`, the working result is at
+  `01_qc/`." That way the user knows the retry happened and where to
+  look.
+- If disk space is genuinely a concern, the user can `rm -rf` the
+  `.failed-N/` directories themselves. Don't preemptively clean.
+
+### Reporting back to the user (artifact handoff)
+
+The canonical handoff is `<run-dir>/05_report/index.html`. That's the
+file the user opens.
+
+- If the user is on Windows, iPad, or phone and can't open HTML on
+  the remote server, copy the report locally:
+  ```bash
+  scp -r <host>:<run-dir>/05_report ./
+  ```
+  Then point the user at the local copy.
+- For long-running pipelines, mention the run-dir path EARLY ("scellrun
+  is running, output will land in `/tmp/scellrun_out/run-...`; I'll
+  surface the report when it's ready"). That gives the user something
+  to reference if the connection drops or the agent times out before
+  the run completes.
 
 ## Hard rules for the agent (don't break these)
 
