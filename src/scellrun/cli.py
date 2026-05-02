@@ -704,6 +704,14 @@ def analyze_cmd(
             "The retry may still fail to rescue the stage. Default: off."
         ),
     ),
+    apply_overrides: Path | None = typer.Option(
+        None,
+        "--apply-overrides",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a review_overrides.json (from `scellrun review`). Cluster-label / cell-exclusion / threshold overrides get applied; recorded as source=user rows in the decision log.",
+    ),
 ) -> None:
     """
     One-shot pipeline: qc → integrate → markers → annotate → report.
@@ -784,6 +792,7 @@ def analyze_cmd(
             regress_cell_cycle=regress_cell_cycle,
             use_pubmed=use_pubmed,
             auto_fix=auto_fix,
+            apply_overrides=apply_overrides,
             on_progress=lambda s: console.print(s),
         )
     except StageFailure as e:
@@ -833,6 +842,64 @@ def report_cmd(
         params={"out_dir": out_dir, "lang": lang, "force": force},
     )
     console.print(f"[bold]index:[/bold] [link=file://{artifacts['index'].resolve()}]{artifacts['index']}[/link]")
+
+
+@app.command("review")
+def review_cmd(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, readable=True, help="Run directory (e.g. scellrun_out/run-...)."),
+    port: int = typer.Option(8788, "--port", help="Port to bind on 127.0.0.1. If taken, falls forward to the next free port."),
+    read_only: bool = typer.Option(False, "--read-only/--editable", help="Disable the Save button (useful when sharing the URL through a tunnel)."),
+    lang: str | None = typer.Option(None, "--lang", help="UI language: 'en' or 'zh'. Default: whatever 00_run.json's first stage used."),
+) -> None:
+    """
+    Start a local Flask review server bound to 127.0.0.1.
+
+    Browser UI lets the reviewer override cluster labels, exclude cells,
+    nudge thresholds, and leave a notes field. On Save, the override
+    file lands at <run-dir>/06_views/review_overrides.json. Re-run the
+    pipeline with `scellrun analyze --apply-overrides <file>` to fold
+    the edits into a fresh run.
+    """
+    if lang is not None and lang not in ("en", "zh"):
+        console.print(f"[red]error:[/red] --lang must be 'en' or 'zh', got {lang!r}")
+        raise typer.Exit(2) from None
+
+    from scellrun.review import serve
+
+    try:
+        serve(run_dir, port=port, read_only=read_only, lang=lang)
+    except KeyboardInterrupt:
+        console.print("review server stopped.")
+
+
+@app.command("export")
+def export_cmd(
+    run_dir: Path = typer.Argument(..., exists=True, file_okay=False, readable=True, help="Run directory (e.g. scellrun_out/run-...)."),
+    fmt: str = typer.Option("pdf", "--format", help="Output format. Currently only 'pdf' is implemented; the flag stays for forward-compat."),
+    out: Path | None = typer.Option(None, "--out", help="Output path. Default: <run-dir>/05_report/index.pdf."),
+    landscape: bool = typer.Option(False, "--landscape/--portrait", help="Page orientation (PDF only). Default: portrait."),
+) -> None:
+    """
+    Render <run-dir>/05_report/index.html into a print-ready PDF.
+
+    Requires the export extra (pip install 'scellrun[export]').
+    Embedded PNGs resolve via relative paths from the source HTML.
+    """
+    if fmt != "pdf":
+        console.print(f"[red]error:[/red] only --format pdf is implemented, got {fmt!r}")
+        raise typer.Exit(2) from None
+
+    from scellrun.export import ExportDepMissing, ExportError, run_export
+
+    try:
+        path = run_export(run_dir, fmt=fmt, out=out, landscape=landscape)
+    except ExportDepMissing as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
+    except ExportError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(1) from None
+    console.print(f"[bold]wrote:[/bold] [link=file://{path.resolve()}]{path}[/link]")
 
 
 @profiles_app.command("list")

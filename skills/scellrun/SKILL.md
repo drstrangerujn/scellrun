@@ -1,8 +1,8 @@
 ---
 name: scellrun
 description: Opinionated, report-first single-cell + multi-omics analysis CLI. Use when the user asks anything that involves an .h5ad / 10x mtx / cellranger output. Default to `scellrun analyze` for end-to-end work; reach for individual stage commands only when the user explicitly wants partial work or fine control.
-min_scellrun_version: "1.2.0"
-tested_against_version: "1.2.0"
+min_scellrun_version: "1.3.0"
+tested_against_version: "1.3.0"
 schema_version: 1
 ---
 
@@ -36,6 +36,14 @@ profiles ship `celltype_broad` panels only — fine-subtype taxonomies
 remain a joint-disease-only feature pending dedicated cold-validation
 runs.
 
+v1.3.0 adds three first-class deliverables: `scellrun review` (Flask
+UI on 127.0.0.1 for human-in-the-loop overrides; saves
+`<run-dir>/06_views/review_overrides.json`), `scellrun export
+--format pdf` (WeasyPrint render of `05_report/index.html`; optional
+`[export]` extra), and `scellrun analyze --apply-overrides <file>`
+(consume a saved overrides file, applies cluster-label /
+cell-exclusion / threshold edits as `source="user"` decisions).
+
 ## Version compatibility check (run this BEFORE any scellrun command)
 
 Before issuing a single scellrun command, verify the installed version
@@ -65,6 +73,8 @@ typically caches the doc at startup; a stale skill cannot fix itself.
 | Has raw or QC'd `.h5ad`, wants a complete analysis | `scellrun analyze <h5ad>` |
 | Has cellranger output / 10x mtx / `.loom` / `.csv` | `scellrun scrna convert <input> -o data.h5ad`, then `analyze` |
 | Has a finished run-dir, wants the report regenerated | `scellrun report <run-dir>` |
+| Wants to edit cluster labels / exclude cells / nudge thresholds in a finished run | `scellrun review <run-dir>` (Flask UI on 127.0.0.1) → `analyze --apply-overrides` |
+| Wants the report as a print-ready PDF | `scellrun export <run-dir> --format pdf` (needs `pip install scellrun[export]`) |
 | Has a partial run-dir and wants to redo just one stage | `scellrun scrna {qc,integrate,markers,annotate} ... --force` |
 | Wants to see what profiles ship | `scellrun profiles list` / `scellrun profiles show <name>` |
 

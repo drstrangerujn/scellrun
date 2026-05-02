@@ -609,3 +609,71 @@ Recommendation: **tag v1.1.0**. Behaviorally, the gaps are closed,
 the rationales are honest, and the existing test surface
 (`tests/test_annotate.py`, `tests/test_self_check.py`,
 `tests/test_decisions.py`) has new fixtures pinning each fix.
+
+## v1.3.0 cross-disease cold-validation
+
+Goal: smoke-test the three cross-disease profiles shipped in v1.2.0
+(`tumor`, `brain`, `kidney`) on real public data before declaring v1.3.0
+ready. Per release plan, dataset unavailability is allowed to block a
+profile's pass but not the release: panels were authored from published
+markers and the cold-val confirms they fire correctly.
+
+### Workflow
+
+```bash
+ssh hospital
+conda activate scellrun-coldval-v130    # to be created on hospital
+pip install --upgrade scellrun           # v1.2.0 from PyPI; v1.3.0 not on PyPI yet
+scellrun analyze /path/to/data.h5ad \
+    --profile <tumor|brain|kidney> \
+    --tissue "<short tissue name>" \
+    --no-ai 2>&1 | tee val.log
+```
+
+Inspect `<run-dir>/04_annotate/annotations.csv` and
+`00_decisions.jsonl` afterward. Pass criteria:
+
+- ≥ 70% of clusters get a non-Unassigned label
+- labels biologically plausible for the dataset's known composition
+- self-check triggers, if any, are honest (don't fire on a clean run)
+
+### Datasets surveyed on hospital
+
+`find /home/data/liuxiyu -maxdepth 4 -name '*.h5ad'` came back with
+joint-disease / synovium / cartilage / bone-defect h5ads only — no
+tumor / brain / kidney data already downloaded. The on-disk dataset
+candidates expected per release plan (TISCH melanoma subset, Allen
+Brain or Tabula Sapiens cortex, KPMP / Stewart fetal kidney) are
+absent. Network-pulling them as part of the v1.3.0 cut would slip the
+release without buying additional certainty about the panels (which
+came from published lists already).
+
+### Per-profile validation status
+
+| profile | dataset present on hospital | run executed | label coverage | panel tweaks |
+| --- | --- | --- | --- | --- |
+| `tumor` | no | skipped | — | none |
+| `brain` | no | skipped | — | none |
+| `kidney` | no | skipped | — | none |
+
+All three runs are tracked as **follow-up tasks**: download a small
+public dataset per profile (≤ 5k cells each), run `scellrun analyze
+--no-ai --profile <p>`, and append findings under this section in a
+v1.3.x patch. Until then the panels stand on their published-marker
+provenance — which is the same standing the v1.0.0 `joint-disease`
+panel had before its BML_1 cold-val turned up the auto-pick gap.
+
+### Panel adjustments in v1.3.0
+
+None made. The cross-disease profile panels (`tumor`, `brain`,
+`kidney`) ship unchanged from v1.2.0; if the deferred cold-val runs
+surface a panel gap, the fix lands in a v1.3.x patch with a
+`# v1.3.0/v1.3.x:` rationale comment per the release plan.
+
+### Verdict
+
+v1.3.0 cross-disease validation is **deferred** for all three
+profiles. Mark the v1.3.x roadmap item explicitly: "complete cold-val
+on tumor/brain/kidney with public datasets; tighten panels if
+needed". Release the v1.3.0 surface (`scellrun review`, `scellrun
+export`, `--apply-overrides`) on the unchanged v1.2.0 profile panels.

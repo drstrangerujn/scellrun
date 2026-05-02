@@ -359,6 +359,19 @@ def first_run_hint() -> str | None:
         return None
 
 
+def _load_overrides(path: Path | None) -> dict[str, Any]:
+    """Read a review_overrides.json; return {} if no path."""
+    if path is None:
+        return {}
+    import json
+
+    with Path(path).open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"overrides file {path} must contain a JSON object at top level")
+    return data
+
+
 def run_analyze(
     h5ad: Path,
     *,
@@ -378,6 +391,7 @@ def run_analyze(
     use_pubmed: bool = False,
     write_h5ad: bool = True,
     auto_fix: bool = False,
+    apply_overrides: Path | None = None,
     on_progress: Any = None,
     attempt_id: str | None = None,
 ) -> AnalyzeResult:
@@ -416,6 +430,39 @@ def run_analyze(
     if run_dir is None:
         run_dir = default_run_dir()
     run_dir = Path(run_dir)
+
+    # v1.3.0: load review-server overrides up front so QC threshold
+    # tweaks land before the QC stage runs.
+    overrides_data = _load_overrides(apply_overrides)
+    threshold_overrides_user = (
+        overrides_data.get("threshold_overrides") or {}
+    ) if overrides_data else {}
+    cluster_label_overrides_user = (
+        overrides_data.get("cluster_label_overrides") or {}
+    ) if overrides_data else {}
+    cell_exclusions_user: list[str] = list(
+        overrides_data.get("cell_exclusions") or []
+    ) if overrides_data else []
+    review_notes = str(overrides_data.get("notes") or "") if overrides_data else ""
+
+    if overrides_data:
+        record(
+            run_dir,
+            Decision(
+                stage="analyze",
+                key="applied_overrides",
+                value=str(apply_overrides),
+                default=None,
+                source="user",
+                attempt_id=attempt_id,
+                rationale=(
+                    f"reviewer-supplied overrides loaded from {apply_overrides}; "
+                    f"thresholds={list(threshold_overrides_user.keys()) or 'none'}, "
+                    f"label_overrides={len(cluster_label_overrides_user)}, "
+                    f"cell_exclusions={len(cell_exclusions_user)}"
+                ),
+            ),
+        )
 
     # Resolve the resolution sweep up front so we can pass it to integrate.
     if isinstance(resolutions, str):
@@ -490,6 +537,12 @@ def run_analyze(
     overrides: dict[str, Any] = {"species": species}
     if max_genes is not None:
         overrides["max_genes"] = max_genes
+    # v1.3.0: review-server threshold overrides land here so the user's
+    # slider edits become source="user" rows in the decision log.
+    if threshold_overrides_user:
+        for k in ("max_pct_mt", "max_genes", "min_counts"):
+            if k in threshold_overrides_user and threshold_overrides_user[k] is not None:
+                overrides[k] = threshold_overrides_user[k]
     qc_thresholds = dataclasses.replace(base_thresholds, **overrides)
     user_overrides_for_log = {k: v for k, v in overrides.items() if k != "species"}
 
@@ -1156,6 +1209,20 @@ def run_analyze(
     _say(annotate_summary)
     stages_completed.append("annotate")
 
+    # ---- v1.3.0: apply review overrides -----------------------------------
+    # Cluster-label and cell-exclusion overrides land AFTER the annotate
+    # stage so the deterministic call still ran (and is in the log) and
+    # the user's edit becomes a source="user" override on top.
+    if cluster_label_overrides_user or cell_exclusions_user:
+        _apply_post_annotate_overrides(
+            run_dir=run_dir,
+            annot_out=annot_out,
+            integrated_h5ad_path=integrated_h5ad_path,
+            cluster_label_overrides=cluster_label_overrides_user,
+            cell_exclusions=cell_exclusions_user,
+            attempt_id=attempt_id,
+        )
+
     # ---- Stage 5: report ---------------------------------------------------
     report_out = _resolve_stage_dir(
         run_dir, "report", force=force, attempt_id=attempt_id
@@ -1196,6 +1263,23 @@ def run_analyze(
         )
         if "index" in views_artifacts:
             _say(f"[5/5] views: {views_artifacts['index']}")
+
+    if review_notes:
+        # Top-level "review_notes" field on the run manifest so any reader
+        # of 00_run.json sees the reviewer's reasoning without parsing
+        # the per-stage params.
+        import json as _json
+
+        meta_path = run_dir / "00_run.json"
+        if meta_path.exists():
+            try:
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["review_notes"] = review_notes
+                meta_path.write_text(
+                    _json.dumps(meta, indent=2, default=str), encoding="utf-8"
+                )
+            except (OSError, _json.JSONDecodeError):
+                pass
 
     return AnalyzeResult(
         run_dir=run_dir,
@@ -1270,10 +1354,119 @@ def _resolve_stage_dir(
         raise StageFailure(stage, e) from None
 
 
+def _apply_post_annotate_overrides(
+    *,
+    run_dir: Path,
+    annot_out: Path,
+    integrated_h5ad_path: Path,
+    cluster_label_overrides: dict[str, str],
+    cell_exclusions: list[str],
+    attempt_id: str,
+) -> None:
+    """
+    v1.3.0: rewrite 04_annotate/annotations.csv with the reviewer's
+    label overrides applied (deterministic call still recorded under
+    `panel_label`; new `final_label` column carries the user's pick),
+    and patch 04_annotate/annotated.h5ad's `obs.scellrun_qc_pass` to
+    flag out user-excluded barcodes.
+
+    Both edits are recorded as `source="user"` rows in the decision log
+    so the report carries the override trail. Excluded cells stay in
+    the .h5ad — they're flagged out, not removed (the QC stage's
+    flag-don't-drop policy extends here too).
+    """
+    import csv as _csv
+
+    annotations_csv = annot_out / "annotations.csv"
+    if cluster_label_overrides and annotations_csv.exists():
+        rows: list[dict[str, str]] = []
+        with annotations_csv.open("r", encoding="utf-8", newline="") as f:
+            reader = _csv.DictReader(f)
+            fieldnames = list(reader.fieldnames or [])
+            for r in reader:
+                rows.append(dict(r))
+        if "final_label" not in fieldnames:
+            fieldnames.append("final_label")
+        if "label_source" not in fieldnames:
+            fieldnames.append("label_source")
+        for r in rows:
+            cid = str(r.get("cluster", ""))
+            if cid in cluster_label_overrides:
+                r["final_label"] = cluster_label_overrides[cid]
+                r["label_source"] = "user"
+            else:
+                r["final_label"] = r.get("panel_label", "")
+                r["label_source"] = "auto"
+        with annotations_csv.open("w", encoding="utf-8", newline="") as f:
+            writer = _csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for r in rows:
+                writer.writerow(r)
+
+        for cid, label in cluster_label_overrides.items():
+            record(
+                run_dir,
+                Decision(
+                    stage="annotate",
+                    key=f"label_override.cluster_{cid}",
+                    value=label,
+                    default=None,
+                    source="user",
+                    attempt_id=attempt_id,
+                    rationale=(
+                        f"reviewer overrode cluster {cid} label to {label!r} via "
+                        "scellrun review (final_label column)"
+                    ),
+                ),
+            )
+
+    if cell_exclusions:
+        # Patch the annotated.h5ad obs in place — the deterministic
+        # qc_pass row still exists in 01_qc/qc.h5ad; the annotate-stage
+        # h5ad gets the user-flagged-out cells.
+        h5_path = annot_out / "annotated.h5ad"
+        if h5_path.exists():
+            try:
+                import anndata as ad
+
+                a = ad.read_h5ad(h5_path)
+                if "scellrun_qc_pass" not in a.obs.columns:
+                    a.obs["scellrun_qc_pass"] = True
+                excl_set = set(cell_exclusions)
+                # Match by exact obs_names; barcodes the user supplied
+                # but not present in the h5ad are silently no-ops (we
+                # log the count below).
+                mask = a.obs_names.isin(excl_set)
+                n_hit = int(mask.sum())
+                a.obs.loc[mask, "scellrun_qc_pass"] = False
+                a.write_h5ad(h5_path)
+            except Exception:
+                n_hit = 0
+        else:
+            n_hit = 0
+        record(
+            run_dir,
+            Decision(
+                stage="annotate",
+                key="cell_exclusions",
+                value=len(cell_exclusions),
+                default=None,
+                source="user",
+                attempt_id=attempt_id,
+                rationale=(
+                    f"reviewer marked {len(cell_exclusions)} barcodes for exclusion; "
+                    f"matched {n_hit} in annotated.h5ad — flagged scellrun_qc_pass=False"
+                ),
+            ),
+        )
+
+
 # Re-export for tests / callers that imported os from this module historically.
 __all__ = [
     "AnalyzeResult",
     "StageFailure",
+    "_apply_post_annotate_overrides",
+    "_load_overrides",
     "_pick_best_resolution",
     "first_run_hint",
     "run_analyze",
