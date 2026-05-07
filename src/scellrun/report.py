@@ -71,22 +71,35 @@ def _glance_from_decisions(decisions: list[dict]) -> dict[str, object]:
     """
     glance: dict[str, object] = {
         "chosen_resolution": None,
+        # v1.3.2: surface the picker's rationale (and source: auto/ai) so a
+        # reader doesn't have to grep 00_decisions.jsonl to learn why
+        # res=0.3 was picked over res=0.5.
+        "chosen_resolution_rationale": None,
+        "chosen_resolution_source": None,
+        "panel_rationale": None,
         "qc_pass_rate_pct": None,
         "qc_n_pass": None,
         "qc_n_in": None,
         "method": None,
         "panel": None,
         "self_check_codes": [],
+        # v1.3.2: every self-check code paired with its rationale string so
+        # the report can render "SC001 — most balanced…" instead of just
+        # the bare code.
+        "self_check_findings": [],
     }
     for d in decisions:
         stage = d.get("stage")
         key = d.get("key")
         if stage == "analyze" and key == "chosen_resolution_for_annotate":
             glance["chosen_resolution"] = d.get("value")
+            glance["chosen_resolution_rationale"] = d.get("rationale")
+            glance["chosen_resolution_source"] = d.get("source")
         elif stage == "integrate" and key == "method":
             glance["method"] = d.get("value")
         elif stage == "annotate" and key == "panel":
             glance["panel"] = d.get("value")
+            glance["panel_rationale"] = d.get("rationale")
         elif stage == "analyze" and key == "auto_fix.qc.outcome":
             try:
                 v = str(d.get("value", "")).rstrip("%")
@@ -97,6 +110,11 @@ def _glance_from_decisions(decisions: list[dict]) -> dict[str, object]:
             code = d.get("value")
             if isinstance(code, str):
                 glance["self_check_codes"].append(code)  # type: ignore[union-attr]
+                glance["self_check_findings"].append({  # type: ignore[union-attr]
+                    "code": code,
+                    "rationale": d.get("rationale") or "",
+                    "stage": stage,
+                })
     return glance
 
 

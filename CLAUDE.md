@@ -10,9 +10,9 @@ scellrun ≠ scientific skills. Skills are LLM-facing prompt scaffolds. scellrun
 
 1. **Opinionated defaults.** Every threshold/parameter has a one-line rationale in code. If you can't justify the default in one sentence linking to a paper or PI memory, don't ship it.
 2. **Report-first.** Each command produces a report artifact (HTML at minimum), not a pile of plots. Provenance trail in three tiers: data / inference / literature (matches `feedback_report_rules`).
-3. **Smoke-test on real data before claiming done.** Do not commit a command that hasn't been run against an actual h5ad from `/root/oc_analysis/` or another real source.
-4. **Keep v0.1 scope tight.** scRNA QC only. No Harmony, no annotation, no metabolomics until v0.2+.
-5. **Domain-agnostic surface, profile-specific defaults.** Code paths must work for any human scRNA h5ad. Domain-specific knowledge lives in `scellrun.profiles.*` (currently only `default`). Don't bake "OA" or "joint" into command names, public APIs, or generic tests.
+3. **Smoke-test on real data before claiming done.** Do not commit a command that hasn't been run against an actual h5ad from `/root/oc_analysis/` or another real source. Heavy-deps tests (scanpy/anndata stack) run on the hospital server in a conda env, never on the local German server's system Python.
+4. **v1.3 frozen surface — scRNA only.** As of v1.3.1 the CLI surface is FROZEN for the v1.x series: qc, integrate, markers, annotate, analyze, review, export, profiles, scrna_full_report. No new public commands. Bug fixes and additive profiles only. Bulk RNA / metabolomics / proteomics extensions are deferred to a future v2.0 (out of scope for the v1.x cycle); see ROADMAP.md "deferred" section. Rationale: v0.1 charter asked for "fast + stable scRNA analysis"; v1.3 already met that bar, every additional surface dilutes the deliverable.
+5. **Domain-agnostic surface, profile-specific defaults.** Code paths must work for any human scRNA h5ad. Domain-specific knowledge lives in `scellrun.profiles.*` (default + joint-disease + tumor + brain + kidney; cold-validated only on joint-disease). Don't bake "OA" or "joint" into command names, public APIs, or generic tests.
 
 ## Code conventions
 

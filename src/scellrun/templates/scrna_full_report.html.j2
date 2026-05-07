@@ -33,6 +33,9 @@
   .glance-row { margin: .25rem 0; font-size: .95rem; }
   .glance-label { color: #555; min-width: 11rem; display: inline-block; }
   .glance-trigger { color: #b34141; font-weight: 600; }
+  .glance-trigger-text { color: #555; font-size: .9rem; margin-left: .25rem; }
+  .glance-rationale { color: #555; font-size: .85rem; margin-left: 11rem; margin-top: .15rem; line-height: 1.4; }
+  .glance-self-check-list { margin: .3rem 0 .3rem 11rem; }
   .glance ul { margin: .25rem 0 .25rem 1.2rem; padding: 0; }
 </style>
 </head>
@@ -69,13 +72,22 @@
   <div class="glance-row">
     <span class="glance-label">Annotation panel:</span>
     {% if glance.panel %}<code>{{ glance.panel }}</code>{% else %}<em>—</em>{% endif %}
+    {% if glance.panel_rationale %}
+      <div class="glance-rationale">{{ glance.panel_rationale }}</div>
+    {% endif %}
   </div>
   <div class="glance-row">
     <span class="glance-label">Chosen resolution:</span>
     {% if glance.chosen_resolution is not none %}
       <code>{{ glance.chosen_resolution }}</code>
+      {% if glance.chosen_resolution_source == "ai" %}
+        <span class="badge badge-ai">ai</span>
+      {% endif %}
       {% if glance.n_clusters is not none %}
         — <strong>{{ glance.n_clusters }}</strong> clusters
+      {% endif %}
+      {% if glance.chosen_resolution_rationale %}
+        <div class="glance-rationale">{{ glance.chosen_resolution_rationale }}</div>
       {% endif %}
     {% else %}
       <em>—</em>
@@ -91,7 +103,19 @@
     </ul>
   </div>
   {% endif %}
-  {% if glance.self_check_codes %}
+  {% if glance.self_check_findings %}
+  <div class="glance-row">
+    <span class="glance-label">Self-check triggers:</span>
+    <ul class="glance-self-check-list">
+      {% for f in glance.self_check_findings %}
+        <li>
+          <span class="glance-trigger">{{ f.code }}</span>
+          {% if f.rationale %}<span class="glance-trigger-text">— {{ f.rationale }}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% elif glance.self_check_codes %}
   <div class="glance-row">
     <span class="glance-label">Self-check triggers:</span>
     {% for code in glance.self_check_codes %}
