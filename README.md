@@ -4,21 +4,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/scellrun.svg)](https://pypi.org/project/scellrun/)
 
-scellrun stops two analysts — or two LLM agents — from getting two different answers on the same single-cell data.
+> A scRNA-seq CLI with a decision log so two analysts — or two LLM agents — on the same data give the same answer.
 
-## Why this exists
+[中文版 README](README_zh.md)
 
-Single-cell analysis has a documented reproducibility problem. From the field's own retrospective ([Perspectives on rigor and reproducibility in single cell genomics](https://pmc.ncbi.nlm.nih.gov/articles/PMC9122178/)): *"in my group's experience, it is not unusual for reanalysis to find 20% fewer or more clusters in datasets"* — same raw data, different analyst, different answer. The same review notes that of ~50 high-impact single-cell papers surveyed, *"just a handful"* reported any external validation. Most of the choices that drive that 20% divergence — mt% ceiling, HVG count, integration method, clustering resolution, panel pick — are made ad-hoc in a notebook and never written down.
+---
 
-A modern LLM agent handed an `.h5ad` and `scanpy` will write working code and produce a report. That solves *"can the work happen"*. It does not solve *"will two agents on the same data produce the same answer"*, *"can a reviewer reconstruct why mt% was 20 and not 10 six months later"*, or *"is the panel choice consistent with this lab's working practice on this tissue"*. Vanilla agents improvise thresholds, do not record the rationale in any machine-readable form, and have no way to encode the consensus a clinical-bioinformatics team has built over years of dogfooding.
+## The 30-second pitch
 
-scellrun fills that gap. Every threshold has a tested default with a one-sentence rationale; every choice the pipeline makes — auto, user-override, or LLM-recommended — is appended to a `00_decisions.jsonl` file you can grep; tissue-specific working practice ships as `profiles/` (cartilage today, contribute yours); each stage runs a self-check against PI-defined trigger thresholds and surfaces an actionable suggestion before the user sees the downstream finding. Different layer from a workflow manager: if you need orchestration across a cluster, use [nf-core](https://nf-co.re/scrnaseq); scellrun is what you call from inside one of those. Not a replacement for scanpy either — it calls scanpy under the hood, with opinionated parameters and a decision log on top.
+Two analysts on the same scRNA dataset reanalyze it and the cluster count differs by ~20% ([Lähnemann et al., 2020 / PMC9122178](https://pmc.ncbi.nlm.nih.gov/articles/PMC9122178/)). The reason is rarely the science — it's the dozens of tiny choices nobody writes down: mt% ceiling, HVG count, integration method, clustering resolution, panel pick. Six months later nobody remembers which knob got tweaked.
 
-## Who this is for
+scellrun is what you put on top of [scanpy](https://scanpy.readthedocs.io) so every one of those choices ends up in a single grep-able file with a reason next to it. Same data → same defaults → same output, every time. If a reviewer asks "why mt% 20?" you read line 14 of `00_decisions.jsonl` to them.
 
-- **The LLM agent (Claude Code, Hermes, Codex) handling a clinician's request.** This is the primary user. The agent ssh's to the data, runs `scellrun analyze`, reads the artifacts, and translates. `skills/scellrun/SKILL.md` is the operational guide it reads.
-- **The clinician-bioinformatics team that wants every project to look the same in a report.** Same QC layout, same decision table, same provenance trail across samples, students, and rotations.
-- **The reviewer asking "why mt% 20?"** The answer is `00_decisions.jsonl` line 14, verbatim: *"mt% ceiling 20.0% — joint tissue is stress-prone, the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, AIO PM=20)"*.
+It's not a workflow manager (use [nf-core](https://nf-co.re/scrnaseq) for cluster orchestration), and it doesn't replace scanpy — it calls scanpy under the hood with opinionated parameters and an audit trail.
 
 ## Quick start
 
@@ -31,50 +29,79 @@ scellrun analyze data.h5ad --tissue "OA cartilage"
 # → ./scellrun_out/run-<ts>/05_report/index.html
 ```
 
-Don't have an `.h5ad`? Cellranger output works directly:
+Got cellranger output instead of an `.h5ad`?
 
 ```bash
 scellrun scrna convert path/to/cellranger_outs -o data.h5ad
 scellrun analyze data.h5ad --tissue "OA cartilage"
 ```
 
-Add `--lang zh` for a Chinese report. Add `--profile joint-disease` if the tissue is cartilage / synovium / subchondral bone (auto-loads the Fan 2024 chondrocyte panel and tightens hb% for avascular cartilage). Walkthrough in [`docs/quickstart.md`](docs/quickstart.md); contribution notes in [`docs/contributing.md`](docs/contributing.md).
+Add `--lang zh` for a Chinese report. Add `--profile joint-disease` for cartilage / synovium / subchondral bone. Walkthrough in [`docs/quickstart.md`](docs/quickstart.md).
 
-## How an agent uses this
+## What you actually get
 
-Drop [`skills/scellrun/SKILL.md`](skills/scellrun/SKILL.md) into your agent's skills directory and the agent will know which command maps to which user intent, how to read the decision log, when to surface a self-check trigger before answering, and which profile to pick by tissue keyword. [`docs/agent-demo.md`](docs/agent-demo.md) is a verbatim transcript of a Claude Code agent running scellrun end-to-end on real OA cartilage scRNA data — including the agent quoting the decision log when the user asks "why resolution 0.3?" and switching panels when the deterministic call is wrong.
+- **Five-stage one-shot**: QC → integrate (Harmony) → markers → annotate → report. One command, one HTML you can email.
+- **Decision log** at `<run>/00_decisions.jsonl` — every non-trivial choice with a one-sentence reason. Greppable; `auto`/`user`/`ai` source labels.
+- **Five tissue profiles** — `default`, `joint-disease` (Fan 2024 chondrocyte panel), `tumor`, `brain`, `kidney`. One Python file each, contribute yours.
+- **Self-check** — each stage detects pathologies (panel mismatch, all-fragmented clusters, single-sample-no-batch) and proposes the cheapest fix. `--auto-fix` applies it.
+- **Reviewer loop** — `scellrun review <run>` runs a tiny local Flask app for cluster relabels, threshold tweaks, and notes; `analyze --apply-overrides <json>` re-runs with the human's edits as `source="user"` rows.
+- **PDF export** — `scellrun export <run> --format pdf` for publication.
 
-## What's in the decision log
+## Who this is for
 
-`00_decisions.jsonl` is the single source of truth for every non-trivial choice the pipeline made. One JSON object per line. Sample shape (real, from `docs/v1demo/decisions.jsonl`):
+- **The LLM agent (Claude Code, Hermes, Codex, OpenClaw) handling a clinician's request.** This is the primary user. Drop [`skills/scellrun/SKILL.md`](skills/scellrun/SKILL.md) into your agent's skill directory; the agent then knows which command maps to which user intent, how to read the decision log, when to surface a self-check trigger.
+- **The clinician-bioinformatics team that wants every project to look the same.** Same QC layout, same decision table, same provenance trail across samples, students, rotations.
+- **The reviewer asking "why mt% 20?"** Open `00_decisions.jsonl`; the answer is on line 14, verbatim.
+
+[`docs/agent-demo.md`](docs/agent-demo.md) is a verbatim Claude Code transcript running scellrun end-to-end on real OA cartilage data, including the agent quoting the decision log when the user asks "why res=0.3?".
+
+## What the decision log looks like
 
 ```jsonl
-{"schema_version":1,"stage":"qc","key":"max_pct_mt","value":20.0,"default":20.0,"source":"auto","rationale":"mt% ceiling 20.0% — joint tissue is stress-prone, the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, AIO PM=20)","fix_payload":null,"attempt_id":"cae89793d0f9470a9c7f38894928f304","ts":"2026-04-30T15:20:32+00:00"}
-{"schema_version":1,"stage":"analyze","key":"method_downgrade","value":"none","default":"harmony","source":"auto","rationale":"no sample/batch column in obs — single-sample input; auto-downgraded --method from harmony to none","fix_payload":null,"attempt_id":"cae89793d0f9470a9c7f38894928f304","ts":"2026-04-30T15:18:51+00:00"}
-{"schema_version":1,"stage":"analyze","key":"chosen_resolution_for_annotate","value":0.3,"default":null,"source":"auto","rationale":"fewest singletons → most balanced (every resolution fragmented) — picked res=0.3: n_clusters=13, largest=31.5%, smallest=0.2%, singletons=2","fix_payload":null,"attempt_id":"cae89793d0f9470a9c7f38894928f304","ts":"2026-04-30T15:20:52+00:00"}
-{"schema_version":1,"stage":"analyze","key":"annotate.auto_panel","value":"celltype_broad","default":null,"source":"auto","rationale":"swapped to celltype_broad: chondrocyte_hits=2, broad_hits=9; required >=1.5x margin to keep chondrocyte panel.","fix_payload":null,"attempt_id":"cae89793d0f9470a9c7f38894928f304","ts":"2026-04-30T15:24:19+00:00"}
-{"schema_version":1,"stage":"annotate","key":"panel","value":"celltype_broad","default":null,"source":"auto","rationale":"orchestrator-injected panel 'celltype_broad' (auto-pick or self-check fix)","fix_payload":null,"attempt_id":"cae89793d0f9470a9c7f38894928f304","ts":"2026-04-30T15:24:49+00:00"}
+{"stage":"qc","key":"max_pct_mt","value":20.0,"default":20.0,"source":"auto",
+ "rationale":"mt% ceiling 20% — joint tissue is stress-prone, the textbook 10% silently drops real chondrocytes (PI cohort 2024-2026, AIO PM=20)"}
+{"stage":"analyze","key":"method_downgrade","value":"none","default":"harmony","source":"auto",
+ "rationale":"no sample/batch column in obs — single-sample input; auto-downgraded --method from harmony to none"}
+{"stage":"analyze","key":"chosen_resolution_for_annotate","value":0.3,"source":"auto",
+ "rationale":"fewest singletons → most balanced (every resolution fragmented) — picked res=0.3: n_clusters=13, largest=31.5%, smallest=0.2%, singletons=2"}
+{"stage":"analyze","key":"annotate.auto_panel","value":"celltype_broad","source":"auto",
+ "rationale":"swapped to celltype_broad: chondrocyte_hits=2, broad_hits=9; required >=1.5x margin to keep chondrocyte panel"}
 ```
 
-Every choice the pipeline made, with a one-sentence rationale, in a file you can grep. `source` is one of `auto` (a built-in heuristic), `user` (a CLI override), or `ai` (an LLM call). `fix_payload` is non-null only on self-check `*.suggest` rows — it carries the structured fix the orchestrator can mechanically apply when `--auto-fix` is on. `attempt_id` groups rows by invocation. The full schema is in [`skills/scellrun/SKILL.md`](skills/scellrun/SKILL.md).
+`source` is `auto` (built-in heuristic), `user` (a CLI / review override), or `ai` (an LLM call). `attempt_id` groups rows by invocation; `fix_payload` carries the structured fix on self-check `*.suggest` rows. Full schema in [`skills/scellrun/SKILL.md`](skills/scellrun/SKILL.md).
+
+v1.3.2 onwards the `chosen_resolution_for_annotate` rationale, panel auto-pick reasoning, and self-check triggers all surface in the HTML report's "At a glance" section so a reader doesn't have to grep the jsonl to learn why a particular resolution / panel got picked.
 
 ## Profiles
 
-A profile is community-encoded working practice for a tissue domain — defaults plus marker panels — in one Python file. v1.0 ships two:
+A profile is community-encoded working practice for a tissue domain — defaults + marker panels in one Python file.
 
-- **`default`** — fresh-tissue 10x v3 chemistry, joint-tissue-aware mt% ceiling at 20% (the textbook 10% silently drops real chondrocytes; the OARSI working group ceiling is 20%).
-- **`joint-disease`** — same QC plus tighter hb% (cartilage is avascular), the Fan 2024 chondrocyte 11-subtype panel, and a 15-group `celltype_broad` panel. Auto-swaps from chondrocyte to broad when the data is immune-rich (subchondral bone, infiltrated synovium, joint fluid) so the report doesn't blindly mis-label pericytes / plasmacytoid DCs / osteoclasts as chondrocyte subtypes.
+| profile | mt% | hb% | panels | notes |
+|---|---|---|---|---|
+| `default` | 20% | — | — | fresh-tissue 10x v3 baseline (OARSI ceiling) |
+| `joint-disease` | 20% | tight | Fan 2024 11-subtype chondrocyte + 15-group broad | cold-validated; auto-swaps to broad on immune-rich data |
+| `tumor` | 20% | — | TISCH/Sun 2021 pan-cancer TME (broad only) | not yet cold-validated |
+| `brain` | 10% | — | Tasic/Hodge cortical-hippocampal (broad only) | not yet cold-validated |
+| `kidney` | 15% | — | KPMP/Stewart 2019 nephron + immune (broad only) | not yet cold-validated |
 
 ```bash
 scellrun profiles list
-scellrun profiles show joint-disease   # prints thresholds + panels
+scellrun profiles show joint-disease   # thresholds + panels
 ```
 
-If your tissue or disease has working practice that diverges from the defaults, contribute a profile — one Python file under `src/scellrun/profiles/`.
+Tissue or disease working practice diverging from the defaults? Contribute a profile — one Python file under `src/scellrun/profiles/`. See [`docs/contributing.md`](docs/contributing.md).
 
-## Roadmap
+## Status
 
-v0.1 → v1.0.1 has shipped: per-stage QC / integrate / markers / annotate, the `analyze` one-shot, the decision log, self-check + `--auto-fix`, the joint-disease profile, panel auto-pick, single-sample auto-downgrade, agent demo, Dockerfile, and the v1.0.1 SKILL.md sync. The CLI surface is frozen for the v1.x series; new stages and profiles land additively. Post-v1.0 directions tracked in [`ROADMAP.md`](ROADMAP.md): conda-forge feedstock, registry-pushed Docker image, bulk RNA-seq subcommand, metabolomics composite scoring, proteomics integration.
+**v1.3 frozen surface — scRNA only.** v1.x is now in maintenance mode. Bug fixes and additive scRNA profiles only; no new public commands. Bulk RNA-seq, metabolomics, and proteomics extensions are deferred to a future v2.0; see [`ROADMAP.md`](ROADMAP.md).
+
+CLI surface (`qc` / `integrate` / `markers` / `annotate` / `analyze` / `review` / `export` / `profiles`) is locked for the v1.x series.
+
+## Distribution
+
+- **PyPI**: `pip install scellrun` ([pypi.org/project/scellrun](https://pypi.org/project/scellrun/))
+- **ClawHub**: `clawhub install scellrun` for agent skills ([clawhub.ai/skills/scellrun](https://clawhub.ai/skills/scellrun))
+- **Docker**: `docker pull ghcr.io/drstrangerujn/scellrun:latest` (v1.0+)
 
 ## License
 
@@ -82,4 +109,4 @@ MIT — see [`LICENSE`](LICENSE).
 
 ## Acknowledgements
 
-Defaults trace to the in-house R AIO pipeline (Liu lab) and clinician-bioinformatics working practice for OARSI / MSK research. Built with assistance from Claude (Anthropic).
+Defaults trace back to the Liu-lab in-house R AIO pipeline and clinician-bioinformatics working practice for OARSI / musculoskeletal research. The Fan 2024 chondrocyte panel ships under the `joint-disease` profile.

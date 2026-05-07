@@ -90,12 +90,20 @@ def _top_markers_per_cluster(
 
     rank_key = f"rank_{cluster_key}"
     if rank_key not in adata.uns:
+        # Match the v1.3.1 cap added in scrna/markers.py — scanpy's default
+        # of "all genes" materializes a multi-million-row recarray at 100+
+        # clusters × 30k+ genes. annotate only ever consumes the top
+        # `DEFAULT_TOP_N_MARKERS` (30) so a 500-gene cap leaves a 16x
+        # margin and bounds memory. Imported lazily to avoid a hot-path
+        # cross-module import.
+        from scellrun.scrna.markers import DEFAULT_RANK_GENES_N_PER_CLUSTER
         sc.tl.rank_genes_groups(
             adata,
             groupby=cluster_key,
             method="wilcoxon",
             use_raw=use_raw,
             pts=True,
+            n_genes=DEFAULT_RANK_GENES_N_PER_CLUSTER,
             key_added=rank_key,
         )
 
