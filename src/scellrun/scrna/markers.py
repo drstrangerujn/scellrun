@@ -23,6 +23,14 @@ DEFAULT_LOGFC = 1.0
 DEFAULT_PCT_MIN = 0.25
 DEFAULT_TOP_N_PER_CLUSTER = 10
 
+# Cap how many top-ranked genes per cluster `rank_genes_groups` returns.
+# scanpy default is "all genes", which at 100+ clusters × 30k+ genes
+# materializes a 3M+ row DataFrame in markers stage (ISSUES.md follow-up
+# from v0.7 dogfood). 500 leaves a 50× margin over DEFAULT_TOP_N_PER_CLUSTER
+# so the post-rank logfc/pct filters still have room to drop noise rows
+# before the report's top-N selection.
+DEFAULT_RANK_GENES_N_PER_CLUSTER = 500
+
 
 @dataclass
 class MarkersResult:
@@ -118,6 +126,7 @@ def run_markers(
             method="wilcoxon",
             use_raw=use_raw,
             pts=True,  # pct.1 / pct.2 columns
+            n_genes=DEFAULT_RANK_GENES_N_PER_CLUSTER,
             key_added=f"rank_{key}",
         )
 

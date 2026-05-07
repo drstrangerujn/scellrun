@@ -74,3 +74,40 @@ def test_write_artifacts_produces_csv_and_report(integrated_synthetic, tmp_path)
     assert artifacts["report"].exists()
     assert (out / "markers_res_0.3.csv").exists()
     assert (out / "markers_res_0.5.csv").exists()
+
+
+def test_markers_caps_at_default_n_per_cluster():
+    """v1.3.1: rank_genes_groups must cap per-cluster output to bound memory.
+
+    With a 1500-gene fixture, each cluster's pre-filter row count must be
+    <= DEFAULT_RANK_GENES_N_PER_CLUSTER. Using ``only_positive=False`` and
+    very loose ``logfc_threshold`` / ``pct_min`` keeps the markers DataFrame
+    in proportion with the rank cap so we can assert directly on it.
+    """
+    from scellrun.scrna.markers import DEFAULT_RANK_GENES_N_PER_CLUSTER
+
+    rng = np.random.default_rng(0)
+    n_cells, n_genes = 200, 1500
+    X = rng.normal(loc=0.5, scale=0.3, size=(n_cells, n_genes)).clip(0, None).astype(np.float32)
+    a = ad.AnnData(X=X)
+    a.var_names = [f"G{i:05d}" for i in range(n_genes)]
+    a.obs_names = [f"c{i:04d}" for i in range(n_cells)]
+    a.obs["leiden_res_0_5"] = (["0"] * 100 + ["1"] * 100)
+    a.obs["leiden_res_0_5"] = a.obs["leiden_res_0_5"].astype("category")
+
+    _, per_res = run_markers(
+        a,
+        only_positive=False,
+        logfc_threshold=0.0,
+        pct_min=0.0,
+    )
+    df = per_res[0.5]
+    # 2 clusters × cap → max possible rows
+    assert len(df) <= 2 * DEFAULT_RANK_GENES_N_PER_CLUSTER
+    # Per-cluster row count must respect the cap
+    for cluster in df["cluster"].unique():
+        n_rows_cluster = (df["cluster"] == cluster).sum()
+        assert n_rows_cluster <= DEFAULT_RANK_GENES_N_PER_CLUSTER, (
+            f"cluster {cluster} has {n_rows_cluster} rows, "
+            f"exceeds cap {DEFAULT_RANK_GENES_N_PER_CLUSTER}"
+        )

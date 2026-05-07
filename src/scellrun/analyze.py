@@ -496,20 +496,40 @@ def run_analyze(
         )
 
     # Issue #001: when the default --method is harmony but the input has no
-    # sample/batch column to integrate over, downgrade to "none" rather
-    # than failing 1m+ into the run. Only auto-downgrade when the caller
-    # didn't explicitly pass --method.
+    # *usable* sample/batch column to integrate over, downgrade to "none"
+    # rather than failing several minutes into the run. The check matches
+    # `scrna.integrate.select_effective_sample_key` so a column that exists
+    # but has only one unique level (single-sample run with `sample=A` for
+    # every cell) also triggers the downgrade. Only auto-downgrade when the
+    # caller didn't explicitly pass --method.
     if method == "harmony" and not method_user_supplied:
+        from scellrun.scrna.integrate import select_effective_sample_key
+
+        present_cols: list[str] = []
+        effective_key: str | None = None
         try:
             quick = ad.read_h5ad(h5ad, backed="r")
-            obs_cols = list(quick.obs.columns)
-            quick.file.close()
+            try:
+                effective_key, present_cols = select_effective_sample_key(quick.obs)
+            finally:
+                quick.file.close()
         except Exception:
-            obs_cols = []
-        sample_candidates = [
-            c for c in ("orig.ident", "sample", "batch", "donor") if c in obs_cols
-        ]
-        if not sample_candidates:
+            effective_key, present_cols = None, []
+
+        if effective_key is None:
+            if present_cols:
+                rationale = (
+                    f"sample/batch column(s) {present_cols} present in obs but with "
+                    "≤1 unique level — single-sample input; auto-downgraded --method "
+                    "from harmony to none. Pass --method harmony explicitly to force "
+                    "the original behavior."
+                )
+            else:
+                rationale = (
+                    "no sample/batch column (orig.ident/sample/batch/donor) in obs — "
+                    "single-sample input; auto-downgraded --method from harmony to none. "
+                    "Pass --method harmony explicitly to force the original behavior."
+                )
             record(
                 run_dir,
                 Decision(
@@ -519,11 +539,7 @@ def run_analyze(
                     default="harmony",
                     source="auto",
                     attempt_id=attempt_id,
-                    rationale=(
-                        "no sample/batch column (orig.ident/sample/batch/donor) in obs — "
-                        "single-sample input; auto-downgraded --method from harmony to none. "
-                        "Pass --method harmony explicitly to force the original behavior."
-                    ),
+                    rationale=rationale,
                 ),
             )
             method = "none"

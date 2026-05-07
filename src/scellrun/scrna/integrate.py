@@ -27,6 +27,32 @@ AIO_FULL_RESOLUTIONS: tuple[float, ...] = (
     0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0,
 )
 
+# Seurat convention: orig.ident is the canonical sample key, then sample/batch/donor.
+SAMPLE_KEY_CANDIDATES: tuple[str, ...] = ("orig.ident", "sample", "batch", "donor")
+
+
+def select_effective_sample_key(obs: pd.DataFrame) -> tuple[str | None, list[str]]:
+    """Pick the first sample-key candidate column that has >= 2 unique levels.
+
+    A column with 0 or 1 unique level cannot drive integration / Harmony — the
+    library will raise downstream. Returning ``None`` here lets callers
+    auto-degrade to ``--method none`` instead of failing several minutes into
+    a run.
+
+    Returns ``(effective_key, present_columns)`` where ``present_columns`` is
+    the candidate columns that exist in ``obs`` (regardless of cardinality).
+    Callers can use the difference between ``present_columns`` and the chosen
+    key to write a precise rationale into the decision log.
+    """
+    present: list[str] = [c for c in SAMPLE_KEY_CANDIDATES if c in obs.columns]
+    for col in present:
+        try:
+            if int(obs[col].nunique(dropna=True)) >= 2:
+                return col, present
+        except Exception:
+            continue
+    return None, present
+
 # Tirosh 2016 cell-cycle gene lists (human). For mouse, use lowercase first letter.
 S_GENES_HUMAN: tuple[str, ...] = (
     "MCM5", "PCNA", "TYMS", "FEN1", "MCM2", "MCM4", "RRM1", "UNG", "GINS2",
@@ -260,17 +286,23 @@ def run_integrate(
     if drop_qc_fail and "scellrun_qc_pass" in adata.obs.columns:
         adata = adata[adata.obs["scellrun_qc_pass"]].copy()
 
-    # Sample-key auto-detection (Seurat convention: orig.ident first)
-    candidates = [c for c in ("orig.ident", "sample", "batch", "donor") if c in adata.obs.columns]
+    # Sample-key auto-detection: pick the first SAMPLE_KEY_CANDIDATES column
+    # that actually has >= 2 unique levels. Single-level columns can't drive
+    # Harmony so they're skipped here (callers — analyze.py — already match
+    # this rule when deciding whether to auto-degrade --method to "none").
     sample_key_was_autodetected = False
-    if sample_key is None and candidates:
-        sample_key = candidates[0]
-        sample_key_was_autodetected = True
-        if len(candidates) > 1:
-            print(
-                f"[scellrun] note: multiple potential sample keys detected: {candidates}. "
-                f"Using {sample_key!r}; pass --sample-key to override."
-            )
+    candidates: list[str] = []
+    if sample_key is None:
+        sample_key, candidates = select_effective_sample_key(adata.obs)
+        if sample_key is not None:
+            sample_key_was_autodetected = True
+            multi_level = [c for c in candidates if c == sample_key or
+                           int(adata.obs[c].nunique(dropna=True)) >= 2]
+            if len(multi_level) > 1:
+                print(
+                    f"[scellrun] note: multiple multi-level sample keys detected: {multi_level}. "
+                    f"Using {sample_key!r}; pass --sample-key to override."
+                )
 
     n_cells_used = adata.n_obs
 
@@ -319,20 +351,47 @@ def run_integrate(
     if cc_regressed:
         sc.pp.regress_out(adata, ["CC_difference"])
 
-    # Scale + PCA on HVGs only — matches Seurat's default and avoids paying the
-    # HVG-selection cost for nothing.
+    # Subset to HVGs *before* scale + PCA. The previous behavior was
+    # `sc.pp.scale(full_adata)` followed by `sc.tl.pca(mask_var="highly_variable")`,
+    # which paid the scaler's memory cost for non-HVG genes that PCA was about
+    # to ignore anyway. At 30k+ cells × 33k+ genes that's the difference
+    # between a ~95 MB working set and a ~1.6 GB working set.
+    # `.raw` retains the full log-normalized expression so downstream markers
+    # / annotate (use_raw=True) still see every gene.
+    n_full_vars = int(adata.n_vars)
+    hvg_mask = adata.var["highly_variable"].values
+    n_hvg = int(hvg_mask.sum())
+    if n_hvg < 50:
+        # Pathological input — degenerate HVG selection on tiny / synthetic
+        # data. Fall back to the pre-v1.3.1 behavior so PCA still runs.
+        scale_subset_to_hvg = False
+        scale_rationale = (
+            f"HVG selection returned only {n_hvg} variable genes (< 50); "
+            "skipping subset and scaling on full matrix to keep PCA viable."
+        )
+    else:
+        adata = adata[:, hvg_mask].copy()
+        scale_subset_to_hvg = True
+        scale_rationale = (
+            f"scale + PCA on {n_hvg} HVGs only (was full matrix at "
+            f"{n_full_vars} genes); .raw retains full normalized expression "
+            "for downstream markers / annotate. Saves ~95% memory at .X for "
+            "typical 30k+ cells × 33k+ gene runs."
+        )
+
     sc.pp.scale(adata, max_value=10)
-    # scanpy 1.11 deprecated `use_highly_variable=True` in favor of
-    # `mask_var="highly_variable"`. Detect support and prefer the new arg
-    # so we don't spam FutureWarnings on every run.
+    # With .X already restricted to HVGs above (when applicable) PCA can run
+    # over the full matrix. Use the explicit kwarg for the degenerate
+    # fallback so PCA still ignores the long tail.
     import inspect
 
     pca_kwargs: dict = dict(n_comps=min(n_pcs, adata.n_obs - 1, adata.n_vars - 1))
-    pca_sig = inspect.signature(sc.tl.pca).parameters
-    if "mask_var" in pca_sig:
-        pca_kwargs["mask_var"] = "highly_variable"
-    else:
-        pca_kwargs["use_highly_variable"] = True
+    if not scale_subset_to_hvg:
+        pca_sig = inspect.signature(sc.tl.pca).parameters
+        if "mask_var" in pca_sig:
+            pca_kwargs["mask_var"] = "highly_variable"
+        else:
+            pca_kwargs["use_highly_variable"] = True
     sc.tl.pca(adata, **pca_kwargs)
 
     # Integration
@@ -411,6 +470,10 @@ def run_integrate(
             ai_model=ai_model,
             use_ai=use_ai,
             attempt_id=attempt_id,
+            scale_subset_to_hvg=scale_subset_to_hvg,
+            scale_rationale=scale_rationale,
+            n_full_vars=n_full_vars,
+            n_hvg=n_hvg,
         )
 
     # v0.8 self-check: too-few-clusters and dominant-cluster guards.
@@ -460,6 +523,10 @@ def _record_integrate_decisions(
     ai_model: str,
     use_ai: bool,
     attempt_id: str,
+    scale_subset_to_hvg: bool = True,
+    scale_rationale: str | None = None,
+    n_full_vars: int | None = None,
+    n_hvg: int | None = None,
 ) -> None:
     """Append all integrate-stage decisions to the run-dir's decision log.
 
@@ -572,6 +639,26 @@ def _record_integrate_decisions(
                     "missing ANTHROPIC_API_KEY, anthropic package, or API call failed"
                 ),
             ))
+
+    # v1.3.1: HVG-subset scale flag — emitted regardless of value so the
+    # decision log always carries a row when integrate runs, making the
+    # scale-stage memory contract reproducible across runs.
+    decisions.append(Decision(
+        stage="integrate",
+        key="scale_subset_to_hvg",
+        value=scale_subset_to_hvg,
+        default=True,
+        source="auto",
+        attempt_id=attempt_id,
+        rationale=(
+            scale_rationale
+            or (
+                f"scaled on {n_hvg} HVGs only (was full matrix at {n_full_vars} genes)"
+                if scale_subset_to_hvg and n_hvg is not None and n_full_vars is not None
+                else "subset-to-HVG before scale enabled"
+            )
+        ),
+    ))
 
     record_many(run_dir, decisions)
 
